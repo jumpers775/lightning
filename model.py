@@ -5,13 +5,15 @@ import torch
 import numpy as np
 
 class Lightning(nn.Module):
-    def __init__(self, input_size, output_size, device, **kwargs):
+    def __init__(self, input_size, output_size, contextlen, device, **kwargs):
         super(Lightning, self).__init__()
         divisor = 2 if input_size % 2 == 0 else 1
 
         self.encoder = Encoder(input_size, input_size//divisor, device)
         self.positionalencoder = PositionalEncoding(input_size//divisor, device)
         self.attention = nn.MultiheadAttention(input_size//divisor, input_size//(2*divisor), device=device)
+
+        self.contextlen = contextlen
 
         self.actions = nn.Sequential(
             nn.Linear(input_size//divisor, input_size),
@@ -36,10 +38,12 @@ class Lightning(nn.Module):
         x = x.to(self.device)
         x = self.encoder(x)
         x = self.positionalencoder(x)
-        attention_mask = torch.triu(torch.ones(x.size(0), x.size(0)), diagonal=1).bool().to(self.device)
+        max_len = min(x.size(0), self.contextlen)
+        attention_mask = torch.triu(torch.ones(max_len, max_len), diagonal=1).bool().to(self.device)
         x, _ = self.attention(x, x, x, attn_mask=attention_mask)
         if critic:
             x = self.critic(x)
+            x = x[-1]
         else:
             x = self.actions(x)
             x = x[-1]

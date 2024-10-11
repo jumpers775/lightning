@@ -31,20 +31,20 @@ class PPO:
         return np.array([action]).astype(np.int32), log_probs
 
     def learn(self, states, actions, rewards, next_states, dones, log_probs):
-        # Convert to tensors
-        states = torch.FloatTensor(np.array(states, dtype=np.float32)).to(self.device)
+        states = [torch.FloatTensor(np.array(s, dtype=np.float32)).to(self.device) for s in states]
+        next_states = [torch.FloatTensor(np.array(s, dtype=np.float32)).to(self.device) for s in next_states]
+
         actions = torch.tensor(np.array(actions, dtype=np.int32)).to(self.device)
         rewards = torch.FloatTensor(np.array(rewards, dtype=np.float32)).to(self.device)
-        next_states = torch.FloatTensor(np.array(next_states, dtype=np.float32)).to(self.device)
         dones = torch.FloatTensor(np.array(dones, dtype=np.float32)).to(self.device)
         log_probs = torch.FloatTensor(np.array(log_probs, dtype=np.float32)).to(self.device)
 
-        # GAE parameters
+
         lambda_ = 0.95
 
         with torch.no_grad():
-            values = self.network(states, critic=True).squeeze()
-            next_values = self.network(next_states, critic=True).squeeze()
+            values = torch.cat([self.network(s, critic=True) for s in states])
+            next_values = torch.cat([self.network(s, critic=True) for s in next_states])
 
             deltas = rewards + self.gamma * next_values * (1 - dones) - values
             advantages = torch.zeros_like(rewards)
@@ -62,7 +62,7 @@ class PPO:
             self.optimizer.zero_grad()
 
             # Policy loss with PPO clipping
-            action_probs = self.network(states)
+            action_probs = torch.cat([self.network(s) for s in states])
             dist = torch.distributions.Categorical(logits=action_probs)
             old_log_probs = log_probs
             new_log_probs = dist.log_prob(actions)
@@ -72,7 +72,8 @@ class PPO:
             surr2 = torch.clamp(ratio, 1.0 - self.eps_clip, 1.0 + self.eps_clip) * advantages
             policy_loss = -torch.min(surr1, surr2).mean()
 
-            value_loss = self.loss(self.network(states, critic=True).squeeze(), returns)
+            value_preds = torch.cat([self.network(s, critic=True) for s in states])
+            value_loss = self.loss(value_preds, returns)
 
             entropy = dist.entropy().mean()
 
