@@ -7,29 +7,34 @@ import numpy as np
 class Lightning(nn.Module):
     def __init__(self, input_size, output_size, device, **kwargs):
         super(Lightning, self).__init__()
-        self.encoder = AutoEncoder(input_size, input_size//2, device)
-        self.positionalencoder = PositionalEncoding(input_size//2, device)
-        self.attention = nn.MultiheadAttention(input_size//2, input_size//4, device=device)
+        divisor = 2 if input_size % 2 == 0 else 1
+
+        self.encoder = Encoder(input_size, input_size//divisor, device)
+        self.positionalencoder = PositionalEncoding(input_size//divisor, device)
+        self.attention = nn.MultiheadAttention(input_size//divisor, input_size//(2*divisor), device=device)
+
         self.actions = nn.Sequential(
-            nn.Linear(input_size//2, input_size),
+            nn.Linear(input_size//divisor, input_size),
             nn.ReLU(True),
-            nn.Linear(input_size, input_size*2),
+            nn.Linear(input_size, input_size*divisor),
             nn.ReLU(True),
-            nn.Linear(input_size*2, output_size)
+            nn.Linear(input_size*divisor, output_size)
         ).to(device)
         self.critic = nn.Sequential(
-            nn.Linear(input_size//2, input_size),
+            nn.Linear(input_size//divisor, input_size),
             nn.ReLU(True),
-            nn.Linear(input_size, input_size*2),
+            nn.Linear(input_size, input_size*divisor),
             nn.ReLU(True),
-            nn.Linear(input_size*2, 1)
+            nn.Linear(input_size*divisor, 1)
         ).to(device)
 
+        self.state_dim = input_size
+        self.action_dim = output_size
         self.device = device
 
     def forward(self, x, critic=False):
         x = x.to(self.device)
-        x = self.encoder.encode(x)
+        x = self.encoder(x)
         x = self.positionalencoder(x)
         attention_mask = torch.triu(torch.ones(x.size(0), x.size(0)), diagonal=1).bool().to(self.device)
         x, _ = self.attention(x, x, x, attn_mask=attention_mask)
@@ -37,13 +42,13 @@ class Lightning(nn.Module):
             x = self.critic(x)
         else:
             x = self.actions(x)
-        x = x[-1]
-        x = F.softmax(x, dim=0)
+            x = x[-1]
+            x = F.softmax(x, dim=0)
         return x
 
-class AutoEncoder(nn.Module):
+class Encoder(nn.Module):
     def __init__(self, input_size, output_size, device=torch.device("cpu"), **kwargs):
-        super(AutoEncoder, self).__init__()
+        super(Encoder, self).__init__()
         self.encoder = nn.Sequential(
             nn.Linear(input_size, input_size*2),
             nn.ReLU(True),
@@ -53,30 +58,10 @@ class AutoEncoder(nn.Module):
             nn.ReLU(True),
             nn.Linear(input_size*2, output_size)
         ).to(device)
-        self.decoder = nn.Sequential(
-            nn.Linear(output_size, input_size),
-            nn.ReLU(True),
-            nn.Linear(input_size, input_size*2),
-            nn.ReLU(True),
-            nn.Linear(input_size*2, input_size*4),
-            nn.ReLU(True),
-            nn.Linear(input_size*4, input_size*2),
-            nn.ReLU(True),
-            nn.Linear(input_size*2, input_size)
-        ).to(device)
 
     def forward(self, x):
-        x.to(self.encoder[0].weight.device)
-        x = self.encoder(x)
-        x = self.decoder(x)
-        return x
-    def encode(self, x):
-        x.to(self.encoder[0].weight.device)
+        x = x.to(self.encoder[0].weight.device)
         return self.encoder(x)
-    def decode(self, x):
-        x.to(self.decoder[0].weight.device)
-        return self.decoder(x)
-
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, device=torch.device("cpu"), max_len=5000):
         super(PositionalEncoding, self).__init__()
