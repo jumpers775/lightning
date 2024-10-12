@@ -16,8 +16,6 @@ class PPO:
         state_dim = network.state_dim
         action_dim = network.action_dim
 
-        self.autoencoder_optimizer = torch.optim.Adam(self.network.encoder.parameters(), lr=1e-3)
-
         self.optimizer = Adam(self.network.parameters(), lr=lr)
 
         self.loss = nn.MSELoss()
@@ -61,7 +59,6 @@ class PPO:
         for _ in range(self.K):
             self.optimizer.zero_grad()
 
-            # Policy loss with PPO clipping
             action_probs = torch.cat([self.network(s) for s in states])
             dist = torch.distributions.Categorical(logits=action_probs)
             old_log_probs = log_probs
