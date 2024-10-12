@@ -6,6 +6,12 @@ __pycache__/
 # C extensions
 *.so
 
+# Matplotlib
+*.png
+
+# Model files
+*.pth
+
 # Distribution / packaging
 .Python
 build/
