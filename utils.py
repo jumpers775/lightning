@@ -16,7 +16,7 @@ class CustomActorCriticPolicy(ActorCriticPolicy):
         *args,
         **kwargs,
     ):
-        # Disable orthogonal initialization
+        self.action_dims = action_space.n
         kwargs["ortho_init"] = False
         super().__init__(
             observation_space,
@@ -28,8 +28,9 @@ class CustomActorCriticPolicy(ActorCriticPolicy):
         )
 
 
+
     def _build_mlp_extractor(self) -> None:
-        self.mlp_extractor = Lightning(self.features_dim)
+        self.mlp_extractor = Lightning(self.features_dim//500, last_layer_dim_pi=self.action_dims, last_layer_dim_vf=1)
 
 class HistoryWrapper(gym.Wrapper):
     def __init__(self, env, history_length=1):

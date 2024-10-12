@@ -25,7 +25,7 @@ def main():
     model = PPO(CustomActorCriticPolicy, env, verbose=1)
 
 
-    model.learn(100000, progress_bar=True)
+    model.learn(1000000, progress_bar=True)
 
     env.close()
 

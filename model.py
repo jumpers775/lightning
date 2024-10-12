@@ -14,18 +14,17 @@ class Lightning(nn.Module):
     def __init__(
         self,
         feature_dim: int,
-        last_layer_dim_pi: int = 64,
-        last_layer_dim_vf: int = 64,
+        last_layer_dim_pi: int,
+        last_layer_dim_vf: int,
     ):
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.latent_dim_pi = last_layer_dim_pi
         self.latent_dim_vf = last_layer_dim_vf
 
+
         self.encoder = nn.Sequential(
             nn.Linear(feature_dim, feature_dim//2),
-            nn.ReLU(True),
-            nn.Linear(feature_dim//2, feature_dim//2),
             nn.ReLU(True),
             nn.Linear(feature_dim//2, feature_dim//2),
             nn.ReLU(True)
@@ -33,16 +32,12 @@ class Lightning(nn.Module):
 
         self.positionalencoder = PositionalEncoding(feature_dim//2)
 
-        self.attention = MultiheadDiffAttention(feature_dim//2, feature_dim//4)
+        self.attention = MultiheadDiffAttention(feature_dim//2, 4)
 
         self.actions = nn.Sequential(
             nn.Linear(feature_dim//2, feature_dim),
             nn.ReLU(True),
             nn.Linear(feature_dim, feature_dim*2),
-            nn.ReLU(True),
-            nn.Linear(feature_dim*2, feature_dim*2),
-            nn.ReLU(True),
-            nn.Linear(feature_dim*2, feature_dim*2),
             nn.ReLU(True),
             nn.Linear(feature_dim*2, self.latent_dim_pi)
         )
@@ -52,10 +47,6 @@ class Lightning(nn.Module):
             nn.ReLU(True),
             nn.Linear(feature_dim, feature_dim*2),
             nn.ReLU(True),
-            nn.Linear(feature_dim*2, feature_dim*2),
-            nn.ReLU(True),
-            nn.Linear(feature_dim*2, feature_dim*2),
-            nn.ReLU(True),
             nn.Linear(feature_dim*2, self.latent_dim_vf)
         )
 
@@ -64,19 +55,29 @@ class Lightning(nn.Module):
 
     def forward_actor(self, features: torch.Tensor) -> torch.Tensor:
         x = features.to(self.device)
-        x = self.encoder(x)
-        x = self.positionalencoder(x)
-        x, _ = self.attention(x, x, x)
-        x = self.actions(x)
-        return x[-1]
+        out_tensor = torch.zeros(features.shape[0], self.latent_dim_pi).to(self.device)
+        for i, tensor in enumerate(x):
+            tensor = tensor.split(8)
+            tensor = torch.stack(tensor).squeeze(1)
+            x = self.encoder(tensor)
+            x = self.positionalencoder(x)
+            x, _ = self.attention(x, x, x)
+            x = self.actions(x)
+            out_tensor[i] = x[-1]
+        return out_tensor
 
     def forward_critic(self, features: torch.Tensor) -> torch.Tensor:
         x = features.to(self.device)
-        x = self.encoder(x)
-        x = self.positionalencoder(x)
-        x, _ = self.attention(x, x, x)
-        x = self.critic(x)
-        return x[-1]
+        out_tensor = torch.zeros(features.shape[0], self.latent_dim_vf).to(self.device)
+        for i, tensor in enumerate(x):
+            tensor = tensor.split(8)
+            tensor = torch.stack(tensor).squeeze(1)
+            x = self.encoder(tensor)
+            x = self.positionalencoder(x)
+            x, _ = self.attention(x, x, x)
+            x = self.critic(x)
+            out_tensor[i] = x[-1]
+        return out_tensor
 
 
 class Encoder(nn.Module):
