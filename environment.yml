@@ -13,3 +13,4 @@ dependencies:
   - torchvision=2.4.1
   - matplotlib=1.3.0
   - pandas=2.2.3
+  - stable-baselines3=2.3.2

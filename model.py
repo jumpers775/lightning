@@ -6,54 +6,78 @@ import torch
 import numpy as np
 import math
 from typing import Optional, Tuple
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+
 
 
 class Lightning(nn.Module):
-    def __init__(self, input_size, output_size, contextlen, device, **kwargs):
-        super(Lightning, self).__init__()
-        divisor = 2 if input_size % 2 == 0 else 1
+    def __init__(
+        self,
+        feature_dim: int,
+        last_layer_dim_pi: int = 64,
+        last_layer_dim_vf: int = 64,
+    ):
+        super().__init__()
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.latent_dim_pi = last_layer_dim_pi
+        self.latent_dim_vf = last_layer_dim_vf
 
-        self.encoder = Encoder(input_size, input_size//divisor, device)
-        self.positionalencoder = PositionalEncoding(input_size//divisor, device)
-        self.attention = MultiheadDiffAttention(input_size//divisor, input_size//(2*divisor), device=device)
+        self.encoder = nn.Sequential(
+            nn.Linear(feature_dim, feature_dim//2),
+            nn.ReLU(True),
+            nn.Linear(feature_dim//2, feature_dim//2),
+            nn.ReLU(True),
+            nn.Linear(feature_dim//2, feature_dim//2),
+            nn.ReLU(True)
+        )
 
-        self.contextlen = contextlen
+        self.positionalencoder = PositionalEncoding(feature_dim//2)
+
+        self.attention = MultiheadDiffAttention(feature_dim//2, feature_dim//4)
 
         self.actions = nn.Sequential(
-            nn.Linear(input_size//divisor, input_size),
+            nn.Linear(feature_dim//2, feature_dim),
             nn.ReLU(True),
-            nn.Linear(input_size, input_size*divisor),
+            nn.Linear(feature_dim, feature_dim*2),
             nn.ReLU(True),
-            nn.Linear(input_size*divisor, output_size)
-        ).to(device)
+            nn.Linear(feature_dim*2, feature_dim*2),
+            nn.ReLU(True),
+            nn.Linear(feature_dim*2, feature_dim*2),
+            nn.ReLU(True),
+            nn.Linear(feature_dim*2, self.latent_dim_pi)
+        )
+
         self.critic = nn.Sequential(
-            nn.Linear(input_size//divisor, input_size),
+            nn.Linear(feature_dim//2, feature_dim),
             nn.ReLU(True),
-            nn.Linear(input_size, input_size*divisor),
+            nn.Linear(feature_dim, feature_dim*2),
             nn.ReLU(True),
-            nn.Linear(input_size*divisor, 1)
-        ).to(device)
+            nn.Linear(feature_dim*2, feature_dim*2),
+            nn.ReLU(True),
+            nn.Linear(feature_dim*2, feature_dim*2),
+            nn.ReLU(True),
+            nn.Linear(feature_dim*2, self.latent_dim_vf)
+        )
 
-        self.state_dim = input_size
-        self.action_dim = output_size
-        self.device = device
+    def forward(self, features: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self.forward_actor(features), self.forward_critic(features)
 
-    def forward(self, x, critic=False):
-        x = x.to(self.device)
+    def forward_actor(self, features: torch.Tensor) -> torch.Tensor:
+        x = features.to(self.device)
         x = self.encoder(x)
         x = self.positionalencoder(x)
-        max_len = min(x.size(0), self.contextlen)
-        attention_mask = torch.triu(torch.ones(max_len, max_len), diagonal=1).bool().to(self.device)
-        x, _ = self.attention(x, x, x, attn_mask=attention_mask)
-        x = x.squeeze(1)
-        if critic:
-            x = self.critic(x)
-            x = x[-1]
-        else:
-            x = self.actions(x)
-            x = x[-1]
-            x = F.softmax(x, dim=0)
-        return x
+        x, _ = self.attention(x, x, x)
+        x = self.actions(x)
+        return x[-1]
+
+    def forward_critic(self, features: torch.Tensor) -> torch.Tensor:
+        x = features.to(self.device)
+        x = self.encoder(x)
+        x = self.positionalencoder(x)
+        x, _ = self.attention(x, x, x)
+        x = self.critic(x)
+        return x[-1]
+
 
 class Encoder(nn.Module):
     def __init__(self, input_size, output_size, device=torch.device("cpu"), **kwargs):
