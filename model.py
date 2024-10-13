@@ -52,8 +52,7 @@ class Lightning(nn.Module):
 
     def forward(self, features: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.forward_actor(features), self.forward_critic(features)
-
-    def forward_actor(self, features: torch.Tensor) -> torch.Tensor:
+    def forward_generic(self, features: torch.Tensor) -> torch.Tensor:
         x = features.to(self.device)
         y = x.view(x.size(0), 500, 8)
         y = y.view(-1,8)
@@ -62,18 +61,14 @@ class Lightning(nn.Module):
         y = self.positionalencoder(y)
         y, _ = self.attention(y, y, y)
         y = y.view(-1,8//2)
+        return y
+    def forward_actor(self, features: torch.Tensor) -> torch.Tensor:
+        y = self.forward_generic(features)
         y = self.actions(y)
         return y[-1]
 
     def forward_critic(self, features: torch.Tensor) -> torch.Tensor:
-        x = features.to(self.device)
-        y = x.view(x.size(0), 500, 8)
-        y = y.view(-1,8)
-        y = self.encoder(y)
-        y = y.view(x.size(0), 500, 8//2)
-        y = self.positionalencoder(y)
-        y, _ = self.attention(y, y, y)
-        y = y.view(-1,8//2)
+        y = self.forward_generic(features)
         y = self.critic(y)
         return y[-1]
 
