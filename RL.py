@@ -18,14 +18,11 @@ def main():
     action_dim = env.action_space.n
     max_steps = env.spec.max_episode_steps
 
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 
     model = PPO(CustomActorCriticPolicy, env, verbose=1)
 
-
-    model.learn(1000000, progress_bar=True)
+    model.learn(100, progress_bar=True)
 
     env.close()
 
@@ -34,7 +31,7 @@ def main():
 
     obs, info = vec_env.reset()
     for i in tqdm(range(1000)):
-        action, _states = model.predict(obs, deterministic=True)
+        action, _states = model.predict(obs)
         obs, rewards, terminated, truncated, info = vec_env.step(action)
         vec_env.render()
 if __name__ == "__main__":

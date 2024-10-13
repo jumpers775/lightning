@@ -52,6 +52,7 @@ class Lightning(nn.Module):
 
     def forward(self, features: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.forward_actor(features), self.forward_critic(features)
+
     def forward_generic(self, features: torch.Tensor) -> torch.Tensor:
         x = features.to(self.device)
         y = x.view(x.size(0), 500, 8)
@@ -61,16 +62,19 @@ class Lightning(nn.Module):
         y = self.positionalencoder(y)
         y, _ = self.attention(y, y, y)
         y = y.view(-1,8//2)
-        return y
+        return y, x.size(0)
+
     def forward_actor(self, features: torch.Tensor) -> torch.Tensor:
-        y = self.forward_generic(features)
+        y, batchsize = self.forward_generic(features)
         y = self.actions(y)
-        return y[-1]
+        y = y.view(batchsize, 500, 8//2)
+        return y[:, -1, :]
 
     def forward_critic(self, features: torch.Tensor) -> torch.Tensor:
-        y = self.forward_generic(features)
+        y, batchsize = self.forward_generic(features)
         y = self.critic(y)
-        return y[-1]
+        y = y.view(batchsize, 500, 1)
+        return y[:, -1, :]
 
 
 class Encoder(nn.Module):
@@ -110,7 +114,6 @@ class MultiheadDiffAttention(nn.MultiheadAttention):
         super().__init__(embed_dim, num_heads, dropout, bias, add_bias_kv, add_zero_attn,
                          kdim, vdim, batch_first, device, dtype)
 
-        # Initialize lambda as a learnable parameter
         self.lambda_param = nn.Parameter(torch.tensor(0.8))
 
     def forward(
