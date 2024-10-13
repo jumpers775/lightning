@@ -12,7 +12,7 @@ from stable_baselines3.common.logger import configure
 from utils import CustomActorCriticPolicy, HistoryWrapper
 
 
-def main():
+def RL(train: int = 0, model_path: str = None, out: str = None):
 
     envname = 'LunarLander-v2'
     contextlen = 500
@@ -26,39 +26,46 @@ def main():
     action_dim = env.action_space.n
     max_steps = env.spec.max_episode_steps
 
-    device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
     env = make_vec_env(envname, n_envs=os.cpu_count(), wrapper_class=HistoryWrapper, wrapper_kwargs={'history_length': contextlen})
 
-    model = PPO(CustomActorCriticPolicy, env, verbose=1, policy_kwargs={'contextlen': contextlen, "device": device})
+    model = PPO(CustomActorCriticPolicy, env, verbose=1, policy_kwargs={'contextlen': contextlen})
+
+    if model_path:
+        try:
+            model = PPO.load(model_path, env, policy_kwargs={'contextlen': contextlen})
+        except FileNotFoundError:
+            print(f"Model not found at {model_path}")
+            return
 
     model.set_logger(loss_logger)
 
-    model.learn(1000000 * 7, progress_bar=True)
+    if train > 0:
+        model.learn(train, progress_bar=True)
+
+    if out:
+        model.save(out)
 
     env.close()
 
-    log_file = f"{log_dir}/progress.csv"
-    data = pd.read_csv(log_file)
 
-    # Plot the loss values
-    plt.plot(data['time/total_timesteps'], data['train/loss'])
-    plt.xlabel('Timesteps')
-    plt.ylabel('Loss')
-    plt.title('Training Loss Over Time')
-    plt.savefig('loss.png')
+    if train > 0:
+        log_file = f"{log_dir}/progress.csv"
+        data = pd.read_csv(log_file)
 
-    # visualize the trained model
-    #
-    # vec_env = gym.make(envname, render_mode='human')
-    # vec_env = HistoryWrapper(vec_env, history_length=contextlen)
+        plt.plot(data['time/total_timesteps'], data['train/loss'])
+        plt.xlabel('Timesteps')
+        plt.ylabel('Loss')
+        plt.title('Training Loss Over Time')
+        plt.savefig('loss.png')
+    else:
+        vec_env = gym.make(envname, render_mode='human')
+        vec_env = HistoryWrapper(vec_env, history_length=contextlen)
 
-    # obs, info = vec_env.reset()
-    # for i in tqdm(range(1000)):
-    #     action, _states = model.predict(obs)
-    #     obs, rewards, terminated, truncated, info = vec_env.step(action)
-    #     vec_env.render()
-
-
-if __name__ == "__main__":
-    main()
+        obs, info = vec_env.reset()
+        for i in tqdm(range(1000)):
+            action, _states = model.predict(obs)
+            obs, rewards, terminated, truncated, info = vec_env.step(action)
+            if terminated or truncated:
+                obs, info = vec_env.reset()
+            vec_env.render()

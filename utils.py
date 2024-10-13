@@ -14,13 +14,11 @@ class CustomActorCriticPolicy(ActorCriticPolicy):
         action_space: gym.spaces.Space,
         lr_schedule: Callable[[float], float],
         contextlen: int = 500,
-        device: str = "cpu",
         *args,
         **kwargs,
     ):
         self.action_dims = action_space.n
         self.contextlen = contextlen
-        self._device = device
         kwargs["ortho_init"] = False
         super().__init__(
             observation_space,
@@ -31,7 +29,7 @@ class CustomActorCriticPolicy(ActorCriticPolicy):
         )
 
     def _build_mlp_extractor(self) -> None:
-        self.mlp_extractor = Lightning(self.features_dim//500, last_layer_dim_pi=self.action_dims, last_layer_dim_vf=1, contextlen=self.contextlen, device=self._device)
+        self.mlp_extractor = Lightning(self.features_dim//500, last_layer_dim_pi=self.action_dims, last_layer_dim_vf=1, contextlen=self.contextlen)
 
 class HistoryWrapper(gym.Wrapper):
     def __init__(self, env, history_length=1):

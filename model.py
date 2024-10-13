@@ -21,7 +21,8 @@ class Lightning(nn.Module):
         device: str = "cpu",
     ):
         super().__init__()
-        self.device = torch.device(device)
+        self.device = torch.device(device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+)
         self.latent_dim_pi = last_layer_dim_pi
         self.latent_dim_vf = last_layer_dim_vf
         self.features = feature_dim
