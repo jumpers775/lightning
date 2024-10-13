@@ -55,29 +55,27 @@ class Lightning(nn.Module):
 
     def forward_actor(self, features: torch.Tensor) -> torch.Tensor:
         x = features.to(self.device)
-        out_tensor = torch.zeros(features.shape[0], self.latent_dim_pi).to(self.device)
-        for i, tensor in enumerate(x):
-            tensor = tensor.split(8)
-            tensor = torch.stack(tensor).squeeze(1)
-            x = self.encoder(tensor)
-            x = self.positionalencoder(x)
-            x, _ = self.attention(x, x, x)
-            x = self.actions(x)
-            out_tensor[i] = x[-1]
-        return out_tensor
+        y = x.view(x.size(0), 500, 8)
+        y = y.view(-1,8)
+        y = self.encoder(y)
+        y = y.view(x.size(0), 500, 8//2)
+        y = self.positionalencoder(y)
+        y, _ = self.attention(y, y, y)
+        y = y.view(-1,8//2)
+        y = self.actions(y)
+        return y[-1]
 
     def forward_critic(self, features: torch.Tensor) -> torch.Tensor:
         x = features.to(self.device)
-        out_tensor = torch.zeros(features.shape[0], self.latent_dim_vf).to(self.device)
-        for i, tensor in enumerate(x):
-            tensor = tensor.split(8)
-            tensor = torch.stack(tensor).squeeze(1)
-            x = self.encoder(tensor)
-            x = self.positionalencoder(x)
-            x, _ = self.attention(x, x, x)
-            x = self.critic(x)
-            out_tensor[i] = x[-1]
-        return out_tensor
+        y = x.view(x.size(0), 500, 8)
+        y = y.view(-1,8)
+        y = self.encoder(y)
+        y = y.view(x.size(0), 500, 8//2)
+        y = self.positionalencoder(y)
+        y, _ = self.attention(y, y, y)
+        y = y.view(-1,8//2)
+        y = self.critic(y)
+        return y[-1]
 
 
 class Encoder(nn.Module):
@@ -96,6 +94,7 @@ class Encoder(nn.Module):
     def forward(self, x):
         x = x.to(self.encoder[0].weight.device)
         return self.encoder(x)
+
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, device=torch.device("cpu"), max_len=5000):
         super(PositionalEncoding, self).__init__()
@@ -107,7 +106,8 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        return x + self.pe[:x.size(0), :]
+        batch_size, seq_len, _ = x.size()
+        return x + self.pe[:seq_len, :].expand(batch_size, -1, -1)
 
 class MultiheadDiffAttention(nn.MultiheadAttention):
     def __init__(self, embed_dim, num_heads, dropout=0., bias=True, add_bias_kv=False, add_zero_attn=False,
