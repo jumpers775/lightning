@@ -2,6 +2,7 @@ import gymnasium as gym
 import torch
 import matplotlib.pyplot as plt
 import pandas as pd
+import os
 from tqdm import tqdm
 from stable_baselines3 import PPO
 from stable_baselines3.common.policies import ActorCriticPolicy
@@ -12,9 +13,11 @@ from utils import CustomActorCriticPolicy, HistoryWrapper
 
 
 def main():
+
     envname = 'LunarLander-v2'
+    contextlen = 500
     env = gym.make(envname)
-    env = HistoryWrapper(env, history_length=500)
+    env = HistoryWrapper(env, history_length=contextlen)
 
     log_dir = "/tmp/sb3_log/"
     loss_logger = configure(log_dir, ["stdout", "csv"])
@@ -23,9 +26,11 @@ def main():
     action_dim = env.action_space.n
     max_steps = env.spec.max_episode_steps
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
-    model = PPO(CustomActorCriticPolicy, env, verbose=1)
+    env = make_vec_env(envname, n_envs=os.cpu_count(), wrapper_class=HistoryWrapper, wrapper_kwargs={'history_length': contextlen})
+
+    model = PPO(CustomActorCriticPolicy, env, verbose=1, policy_kwargs={'contextlen': contextlen, "device": device})
 
     model.set_logger(loss_logger)
 
@@ -46,7 +51,7 @@ def main():
     # visualize the trained model
     #
     # vec_env = gym.make(envname, render_mode='human')
-    # vec_env = HistoryWrapper(vec_env, history_length=500)
+    # vec_env = HistoryWrapper(vec_env, history_length=contextlen)
 
     # obs, info = vec_env.reset()
     # for i in tqdm(range(1000)):

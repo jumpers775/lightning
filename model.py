@@ -2,6 +2,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch import Tensor
+import torch.jit as jit
 import torch
 import numpy as np
 import math
@@ -16,38 +17,43 @@ class Lightning(nn.Module):
         feature_dim: int,
         last_layer_dim_pi: int,
         last_layer_dim_vf: int,
+        contextlen: int,
+        device: str = "cpu",
     ):
         super().__init__()
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device(device)
         self.latent_dim_pi = last_layer_dim_pi
         self.latent_dim_vf = last_layer_dim_vf
+        self.features = feature_dim
+        self.contextlen = contextlen
 
+        divisor = 2
 
         self.encoder = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim//2),
+            nn.Linear(feature_dim, feature_dim//divisor),
             nn.ReLU(True),
-            nn.Linear(feature_dim//2, feature_dim//2),
+            nn.Linear(feature_dim//divisor, feature_dim//divisor),
             nn.ReLU(True)
         )
 
-        self.positionalencoder = PositionalEncoding(feature_dim//2)
+        self.positionalencoder = PositionalEncoding(feature_dim//divisor)
 
-        self.attention = MultiheadDiffAttention(feature_dim//2, 4)
+        self.attention = MultiheadDiffAttention(feature_dim//divisor, 4)
 
         self.actions = nn.Sequential(
-            nn.Linear(feature_dim//2, feature_dim),
+            nn.Linear(feature_dim//divisor, feature_dim),
             nn.ReLU(True),
-            nn.Linear(feature_dim, feature_dim*2),
+            nn.Linear(feature_dim, feature_dim*divisor),
             nn.ReLU(True),
-            nn.Linear(feature_dim*2, self.latent_dim_pi)
+            nn.Linear(feature_dim*divisor, self.latent_dim_pi)
         )
 
         self.critic = nn.Sequential(
-            nn.Linear(feature_dim//2, feature_dim),
+            nn.Linear(feature_dim//divisor, feature_dim),
             nn.ReLU(True),
-            nn.Linear(feature_dim, feature_dim*2),
+            nn.Linear(feature_dim, feature_dim*divisor),
             nn.ReLU(True),
-            nn.Linear(feature_dim*2, self.latent_dim_vf)
+            nn.Linear(feature_dim*divisor, self.latent_dim_vf)
         )
 
     def forward(self, features: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -55,20 +61,21 @@ class Lightning(nn.Module):
 
     def forward_generic(self, features: torch.Tensor) -> torch.Tensor:
         x = features.to(self.device)
-        y = x.view(x.size(0), 500, 8).view(-1, 8)
-        y = self.encoder(y).view(x.size(0), 500, -1)
+        batchsize = x.size(0)
+        y = x.view(batchsize, self.contextlen, self.features).view(-1, self.features)
+        y = self.encoder(y).view(batchsize, self.contextlen, -1)
         y = self.positionalencoder(y)
         y, _ = self.attention(y, y, y)
-        return y.view(-1, y.size(-1)), x.size(0)
+        return y.reshape(-1, y.size(-1)), batchsize
 
     def forward_actor(self, features: torch.Tensor) -> torch.Tensor:
         y, batchsize = self.forward_generic(features)
-        y = self.actions(y).view(batchsize, 500, -1)
+        y = self.actions(y).view(batchsize, self.contextlen, -1)
         return y[:, -1, :]
 
     def forward_critic(self, features: torch.Tensor) -> torch.Tensor:
         y, batchsize = self.forward_generic(features)
-        y = self.critic(y).view(batchsize, 500, -1)
+        y = self.critic(y).view(batchsize, self.contextlen, -1)
         return y[:, -1, :]
 
 
