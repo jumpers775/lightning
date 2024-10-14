@@ -41,6 +41,18 @@ class Lightning(nn.Module):
 
         self.attention = MultiheadDiffAttention(feature_dim//divisor, 4)
 
+        self.norm1 = nn.LayerNorm(feature_dim//divisor)
+        self.dropout1 = nn.Dropout(0.1)
+
+        self.ffn = nn.Sequential(
+            nn.Linear(feature_dim//divisor, feature_dim),
+            nn.ReLU(True),
+            nn.Linear(feature_dim, feature_dim//divisor)
+        )
+
+        self.norm2 = nn.LayerNorm(feature_dim//divisor)
+        self.dropout2 = nn.Dropout(0.1)
+
         self.actions = nn.Sequential(
             nn.Linear(feature_dim//divisor, feature_dim),
             nn.ReLU(True),
@@ -66,7 +78,16 @@ class Lightning(nn.Module):
         y = x.view(batchsize, self.contextlen, self.features).view(-1, self.features)
         y = self.encoder(y).view(batchsize, self.contextlen, -1)
         y = self.positionalencoder(y)
-        y, _ = self.attention(y, y, y)
+        z, _ = self.attention(y, y, y)
+        if self.training:
+            z = self.dropout1(z)
+        y = y + z
+        y = self.norm1(y)
+        z = self.ffn(y)
+        if self.training:
+            z = self.dropout2(z)
+        y = y + z
+        y = self.norm2(y)
         return y.reshape(-1, y.size(-1)), batchsize
 
     def forward_actor(self, features: torch.Tensor) -> torch.Tensor:
