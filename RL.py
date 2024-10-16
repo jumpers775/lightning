@@ -27,9 +27,9 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
     max_steps = env.spec.max_episode_steps
 
 
-    env = make_vec_env(envname, n_envs=os.cpu_count(), wrapper_class=HistoryWrapper, wrapper_kwargs={'history_length': contextlen})
+    #env = make_vec_env(envname, n_envs=os.cpu_count(), wrapper_class=HistoryWrapper, wrapper_kwargs={'history_length': contextlen})
 
-    model = PPO(CustomActorCriticPolicy, env, verbose=1, policy_kwargs={'contextlen': contextlen})
+    model = PPO(CustomActorCriticPolicy, env, verbose=1, policy_kwargs={'contextlen': contextlen}, device="mps")
 
     if model_path:
         try:
