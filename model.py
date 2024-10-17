@@ -1,5 +1,6 @@
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.modules.linear import Linear
 import torch.optim as optim
 from torch import Tensor
 import torch.jit as jit
@@ -7,116 +8,100 @@ import torch
 import numpy as np
 import math
 from typing import Optional, Tuple
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+
+class SimBa(nn.Module):
+    def __init__(self, obs_shape, action_shape, device: str ="cpu"):
+        super(SimBa, self).__init__()
+        self.device = torch.device(device)
+        self.obs_shape = obs_shape
+        self.action_shape = action_shape
+        self.rsnorm = RSNorm(obs_shape)
+        self.linear1 = nn.Linear(obs_shape, 256).to(device)
+        self.layernorm1 = nn.LayerNorm(256, device=device)
+        self.linear2 = nn.Linear(256, 256).to(device)
+        self.linear3 = nn.Linear(256, 256).to(device)
+        self.layernorm2 = nn.LayerNorm(256, device=device)
+        self.outputlayer = nn.Linear(256, action_shape).to(device)
+    def forward(self, x):
+        x = x.to(self.device)
+        x = self.rsnorm(x)
+        x = self.linear1(x)
+        y = self.layernorm1(x)
+        y = self.linear2(y)
+        y = F.relu(y)
+        y = self.linear3(y)
+        x = x + y
+        x = self.layernorm2(x)
+        x = self.outputlayer(x)
+        x = F.softmax(x, dim=-1)
+        return x
 
 
 
-class Lightning(nn.Module):
-    def __init__(
-        self,
-        feature_dim: int,
-        last_layer_dim_pi: int,
-        last_layer_dim_vf: int,
-        contextlen: int,
-        device: str = "cpu",
-    ):
-        super().__init__()
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
-
-        self.latent_dim_pi = last_layer_dim_pi
-        self.latent_dim_vf = last_layer_dim_vf
-        self.features = feature_dim
-        self.contextlen = contextlen
-
-        divisor = 2
-
-        self.encoder = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim//divisor),
+class ViViTAE(nn.Module):
+    def __init__(self, input_size, output_size, patchnum, maxlen, hidden_dim: int = 512, device: str = "cpu", **kwargs):
+        super(ViViTAE, self).__init__()
+        self.device = torch.device(device)
+        self.tokenizer = nn.Linear(input_size, hidden_dim)
+        self.dropout = nn.Dropout(0.1)
+        self.patchembedding = SinusoidalPositionalEmbedding(patchnum, hidden_dim)
+        self.spatialencoder = TransformerEncoder(hidden_dim, hidden_dim, device=device)
+        self.spatialembedding = SinusoidalPositionalEmbedding(patchnum, hidden_dim)
+        self.temporalencoder = TransformerEncoder(hidden_dim, hidden_dim, device=device)
+        self.latent_encoder = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(True),
-            nn.Linear(feature_dim//divisor, feature_dim//divisor),
-            nn.ReLU(True)
-        )
-
-        self.positionalencoder = PositionalEncoding(feature_dim//divisor)
-
-        self.attention = MultiheadDiffAttention(feature_dim//divisor, 4)
-
-        self.norm1 = nn.LayerNorm(feature_dim//divisor)
-        self.dropout1 = nn.Dropout(0.1)
-
-        self.ffn = nn.Sequential(
-            nn.Linear(feature_dim//divisor, feature_dim),
+            nn.Linear(hidden_dim, output_size)
+        ).to(device)
+        self.decoder = nn.Sequential(
+            nn.Linear(output_size, hidden_dim),
             nn.ReLU(True),
-            nn.Linear(feature_dim, feature_dim//divisor)
-        )
-
-        self.norm2 = nn.LayerNorm(feature_dim//divisor)
-        self.dropout2 = nn.Dropout(0.1)
-
-        self.actions = nn.Sequential(
-            nn.Linear(feature_dim//divisor, feature_dim),
-            nn.ReLU(True),
-            nn.Linear(feature_dim, feature_dim*divisor),
-            nn.ReLU(True),
-            nn.Linear(feature_dim*divisor, self.latent_dim_pi)
-        )
-
-        self.critic = nn.Sequential(
-            nn.Linear(feature_dim//divisor, feature_dim),
-            nn.ReLU(True),
-            nn.Linear(feature_dim, feature_dim*divisor),
-            nn.ReLU(True),
-            nn.Linear(feature_dim*divisor, self.latent_dim_vf)
-        )
-
-    def forward(self, features: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        return self.forward_actor(features), self.forward_critic(features)
-
-    def forward_generic(self, features: torch.Tensor) -> torch.Tensor:
-        x = features.to(self.device)
-        batchsize = x.size(0)
-        y = x.view(batchsize, self.contextlen, self.features).view(-1, self.features)
-        y = self.encoder(y).view(batchsize, self.contextlen, -1)
-        y = self.positionalencoder(y)
-        z, _ = self.attention(y, y, y)
-        if self.training:
-            z = self.dropout1(z)
-        y = y + z
-        y = self.norm1(y)
-        z = self.ffn(y)
-        if self.training:
-            z = self.dropout2(z)
-        y = y + z
-        y = self.norm2(y)
-        return y.reshape(-1, y.size(-1)), batchsize
-
-    def forward_actor(self, features: torch.Tensor) -> torch.Tensor:
-        y, batchsize = self.forward_generic(features)
-        y = self.actions(y).view(batchsize, self.contextlen, -1)
-        return y[:, -1, :]
-
-    def forward_critic(self, features: torch.Tensor) -> torch.Tensor:
-        y, batchsize = self.forward_generic(features)
-        y = self.critic(y).view(batchsize, self.contextlen, -1)
-        return y[:, -1, :]
-
-
-class Encoder(nn.Module):
-    def __init__(self, input_size, output_size, device=torch.device("cpu"), **kwargs):
-        super(Encoder, self).__init__()
-        self.encoder = nn.Sequential(
-            nn.Linear(input_size, input_size*2),
-            nn.ReLU(True),
-            nn.Linear(input_size*2, input_size*4),
-            nn.ReLU(True),
-            nn.Linear(input_size*4, input_size*2),
-            nn.ReLU(True),
-            nn.Linear(input_size*2, output_size)
+            nn.Linear(hidden_dim, hidden_dim)
         ).to(device)
 
     def forward(self, x):
+        x = x.to(self.device)
+        y = self.tokenizer(x)
+        if self.training:
+            y = self.dropout(y)
+        y = self.patchembedding(y)
+        y = self.spatialencoder(y)
+        y = self.spatialembedding(y)
+        y = self.temporalencoder(y)
+        y = self.latent_encoder(y)
+        y = self.decoder(y)
+        return y
+
+
+
+
+class TransformerEncoder(nn.Module):
+    def __init__(self, input_size, output_size, device=torch.device("cpu"), **kwargs):
+        super(TransformerEncoder, self).__init__()
+        self.attention = MultiheadDiffAttention(input_size, 8, device=device)
+        self.norm1 = nn.LayerNorm(input_size, device=device)
+        self.dropout1 = nn.Dropout(0.1)
+        self.ffn = nn.Sequential(
+            nn.Linear(input_size, output_size),
+            nn.ReLU(True),
+            nn.Linear(output_size, input_size)
+        ).to(device)
+        self.norm2 = nn.LayerNorm(input_size, device=device)
+        self.dropout2 = nn.Dropout(0.1)
+
+    def forward(self, x):
         x = x.to(self.encoder[0].weight.device)
-        return self.encoder(x)
+        y = self.attention(x, x, x)
+        if self.training:
+            y = self.dropout1(x)
+        x = x + y
+        x = self.norm1(x)
+        y = self.ffn(x)
+        if self.training:
+            y = self.dropout2(y)
+        x = x + y
+        x = self.norm2(x)
+        return x
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, device=torch.device("cpu"), max_len=5000):
@@ -131,6 +116,65 @@ class PositionalEncoding(nn.Module):
     def forward(self, x):
         batch_size, seq_len, _ = x.size()
         return x + self.pe[:seq_len, :].expand(batch_size, -1, -1)
+
+class SinusoidalPositionalEmbedding(nn.Module):
+    def __init__(self, num_patches, embed_dim):
+        super(SinusoidalPositionalEmbedding, self).__init__()
+        self.num_patches = num_patches
+        self.embed_dim = embed_dim
+
+        self.positional_embedding = self.create_positional_embedding()
+
+    def create_positional_embedding(self):
+        position = torch.arange(self.num_patches, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, self.embed_dim, 2).float() * -(torch.log(torch.tensor(10000.0)) / self.embed_dim))
+
+        pos_emb = torch.zeros(self.num_patches, self.embed_dim)
+        pos_emb[:, 0::2] = torch.sin(position * div_term)
+        pos_emb[:, 1::2] = torch.cos(position * div_term)
+
+        return pos_emb.unsqueeze(0)
+
+    def forward(self, x):
+        batch_size, seq_len, _ = x.size()
+        return x + self.positional_embedding[:, :seq_len, :].expand(batch_size, -1, -1)
+
+class RSNorm(nn.Module):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1):
+        super(RSNorm, self).__init__()
+        self.num_features = num_features
+        self.eps = eps
+        self.momentum = momentum
+
+        self.register_buffer('running_mean', torch.zeros(num_features))
+        self.register_buffer('running_var', torch.ones(num_features))
+        self.register_buffer('num_batches_tracked', torch.tensor(0, dtype=torch.long))
+
+    def forward(self, x):
+        if self.training:
+            batch_mean = x.mean(dim=0)
+            batch_var = x.var(dim=0, unbiased=False)
+
+            self.num_batches_tracked += 1
+
+            if self.num_batches_tracked == 1:
+                update_factor = 1
+            else:
+                update_factor = self.momentum
+
+            self.running_mean = (1 - update_factor) * self.running_mean + update_factor * batch_mean
+            self.running_var = (1 - update_factor) * self.running_var + update_factor * batch_var
+
+            mean = batch_mean
+            var = batch_var
+        else:
+            mean = self.running_mean
+            var = self.running_var
+        return (x - mean) / torch.sqrt(var + self.eps)
+
+
+
+
 
 class MultiheadDiffAttention(nn.MultiheadAttention):
     def __init__(self, embed_dim, num_heads, dropout=0., bias=True, add_bias_kv=False, add_zero_attn=False,

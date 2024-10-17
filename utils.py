@@ -2,34 +2,9 @@ import torch
 import gymnasium as gym
 import numpy as np
 from typing import Callable
-from stable_baselines3.common.policies import ActorCriticPolicy
 from collections import deque
-from model import Lightning
 
 
-class CustomActorCriticPolicy(ActorCriticPolicy):
-    def __init__(
-        self,
-        observation_space: gym.spaces.Space,
-        action_space: gym.spaces.Space,
-        lr_schedule: Callable[[float], float],
-        contextlen: int = 500,
-        *args,
-        **kwargs,
-    ):
-        self.action_dims = action_space.n
-        self.contextlen = contextlen
-        kwargs["ortho_init"] = False
-        super().__init__(
-            observation_space,
-            action_space,
-            lr_schedule,
-            *args,
-            **kwargs,
-        )
-
-    def _build_mlp_extractor(self) -> None:
-        self.mlp_extractor = Lightning(self.features_dim//500, last_layer_dim_pi=self.action_dims, last_layer_dim_vf=1, contextlen=self.contextlen)
 
 class HistoryWrapper(gym.Wrapper):
     def __init__(self, env, history_length=1):
