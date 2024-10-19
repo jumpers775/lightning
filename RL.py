@@ -58,6 +58,8 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
     pbar = tqdm(range(train), desc="Training", unit=" episodes")
 
     for i in pbar:
+        if i % 10 == 0:
+            torch.cuda.empty_cache()
         state, info = env.reset()
         done = False
 
@@ -129,4 +131,4 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
 
 
 if __name__ == "__main__":
-    RL(train=int(500), model_path=None, out="model.pth")
+    RL(train=int(100), model_path=None, out="model.pth")

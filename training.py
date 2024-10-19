@@ -130,7 +130,7 @@ class PPO:
 
 
 class LSTMTrainer:
-    def __init__(self, model, learning_rate=0.001, device=None):
+    def __init__(self, model, learning_rate=0.1, device=None):
         self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = torch.compile(model.to(self.device))
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -154,10 +154,10 @@ class LSTMTrainer:
         hidden = torch.zeros(1, self.model.hidden_size).to(self.device)
         cell = torch.zeros(1, self.model.hidden_size).to(self.device)
 
+        with autocast(device_type=self.device):
+            predicted_states, (hidden, cell) = self.model(images_tensor, (hidden, cell))
 
-        predicted_states, (hidden, cell) = self.model(images_tensor, (hidden, cell))
-
-        loss = self.criterion(predicted_states, states_tensor.float())
+            loss = self.criterion(predicted_states, states_tensor.float())
 
         self.scaler.scale(loss).backward()
 

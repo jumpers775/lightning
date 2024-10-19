@@ -52,14 +52,14 @@ class LSTM(nn.Module):
 
         self.conv = nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, stride=1, padding=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.pool2 = nn.MaxPool2d(kernel_size=4, stride=4)
 
         self.conv_output_size = self._get_conv_output_size(input_size)
 
-        self.dim_reduction = nn.Linear(self.conv_output_size, hidden_size*4)
+        self.dim_reduction = nn.Linear(self.conv_output_size, hidden_size*3)
 
         self.lstm = nn.LSTM(
-            input_size=hidden_size*4,
+            input_size=hidden_size*3,
             hidden_size=hidden_size,
             num_layers=num_layers,
             batch_first=True
@@ -73,7 +73,7 @@ class LSTM(nn.Module):
         x = x.permute(0, 3, 1, 2)
 
         x = self.pool(torch.relu(self.conv(x)))
-        x = self.pool2(x)  # Additional pooling
+        x = self.pool2(x)
         x = x.reshape(seq_len, -1)
 
         x = torch.relu(self.dim_reduction(x))
