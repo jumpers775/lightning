@@ -16,7 +16,7 @@ from model import SimBa, LSTM
 import FIRSTenv
 
 def RL(train: int = 0, model_path: str = None, out: str = None):
-
+    torch.set_float32_matmul_precision('high')
     envname = 'FIRSTenv/FIRSTenv_v0'
     envname = "ALE/Pong-v5"
     env = CombinedObservationEnv(envname)
@@ -42,12 +42,13 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
 
     criticmodel = SimBa(state_dim, 1, device=device)
 
-
-    encodingmodel = LSTM(env.observation_space["rgb"].shape, 256, state_dim)
-
-    visiontrainer = LSTMTrainer(encodingmodel, device="cpu")
-
     ppo = PPO(actingmodel, criticmodel, env.action_space, device=device)
+
+
+    encodingmodel = LSTM(env.observation_space["rgb"].shape, 256, output_size=state_dim)
+
+    visiontrainer = LSTMTrainer(encodingmodel, device=device) # gpu uses too much memory
+
 
     ppo.train()
 
@@ -128,4 +129,4 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
 
 
 if __name__ == "__main__":
-    RL(train=int(1), model_path=None, out="model.pth")
+    RL(train=int(500), model_path=None, out="model.pth")

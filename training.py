@@ -4,6 +4,7 @@ import torch.optim as optim
 import numpy as np
 from torch.distributions import Normal, Categorical
 import torch.nn.functional as F
+from torch.amp import autocast, GradScaler
 from torch.optim import Adam
 from collections import deque
 import random
@@ -15,10 +16,12 @@ class PPO:
         self.K = K
         self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.policynet = actor.to(self.device)
-        self.valuenet = critic.to(self.device)
+        self.policynet = torch.compile(actor.to(self.device))
+        self.valuenet = torch.compile(critic.to(self.device))
         self.optimizer = Adam(list(self.policynet.parameters()) + list(self.valuenet.parameters()), lr=lr)
         self.loss = nn.MSELoss()
+
+        self.scaler = GradScaler()
 
         self.is_continuous = hasattr(action_space, 'high')
         if self.is_continuous:
@@ -103,12 +106,14 @@ class PPO:
             loss = policy_loss + 0.5 * value_loss - 0.01 * entropy
 
             # Compute gradient and apply gradient clipping
-            loss.backward()
+            self.scaler.scale(loss).backward()
 
             # Gradient Clipping
+            self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(list(self.policynet.parameters()) + list(self.valuenet.parameters()), max_norm=0.5)
 
-            self.optimizer.step()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
 
             total_loss += loss.item()
 
@@ -127,11 +132,12 @@ class PPO:
 class LSTMTrainer:
     def __init__(self, model, learning_rate=0.001, device=None):
         self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = model.to(self.device)
+        self.model = torch.compile(model.to(self.device))
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
         self.criterion = nn.MSELoss()
         self.hidden = (torch.zeros(1, 1, 256).to(self.device),
                        torch.zeros(1, 1, 256).to(self.device))
+        self.scaler = GradScaler()
 
     def train(self, images, states):
         self.model.train()
@@ -145,19 +151,21 @@ class LSTMTrainer:
 
         sequence_length, channels, height, width = images_tensor.shape
 
-        hidden = torch.zeros(1, 1, 256).to(self.device)
-        cell = torch.zeros(1, 1, 256).to(self.device)
+        hidden = torch.zeros(1, self.model.hidden_size).to(self.device)
+        cell = torch.zeros(1, self.model.hidden_size).to(self.device)
 
 
         predicted_states, (hidden, cell) = self.model(images_tensor, (hidden, cell))
 
         loss = self.criterion(predicted_states, states_tensor.float())
 
-        loss.backward()
+        self.scaler.scale(loss).backward()
 
+        self.scaler.unscale_(self.optimizer)
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
-        self.optimizer.step
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
         self.optimizer.zero_grad()
 
         return loss.item()
@@ -182,15 +190,12 @@ class LSTMTrainer:
         """
         self.model.eval()
         with torch.no_grad():
-            # Add batch and sequence dimensions
             image_tensor = torch.tensor(image).unsqueeze(0).to(self.device)
 
-            # Normalize the image
             image_tensor = image_tensor.float() / 255.0
 
             predicted_state, self.hidden = self.model(image_tensor, self.hidden)
 
-            # Remove batch and sequence dimensions
             return predicted_state.squeeze(0).squeeze(0).cpu()
 
     def reset_inference_state(self):

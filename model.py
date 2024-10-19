@@ -2,6 +2,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.modules.linear import Linear
 import torch.optim as optim
+from torch.utils.checkpoint import checkpoint
 from torch import Tensor
 import torch.jit as jit
 import torch
@@ -27,10 +28,15 @@ class SimBa(nn.Module):
         x = x.to(self.device)
         x = self.rsnorm(x)
         x = self.linear1(x)
-        y = self.layernorm1(x)
-        y = self.linear2(y)
-        y = F.relu(y)
-        y = self.linear3(y)
+
+        def checkpoint_fn(x):
+            y = self.layernorm1(x)
+            y = self.linear2(y)
+            y = F.relu(y)
+            y = self.linear3(y)
+            return y
+
+        y = checkpoint(checkpoint_fn, x, use_reentrant=False)
         x = x + y
         x = self.layernorm2(x)
         x = self.outputlayer(x)
@@ -38,19 +44,22 @@ class SimBa(nn.Module):
 
 
 class LSTM(nn.Module):
-    def __init__(self, input_size, hidden_size=256, num_layers=2, output_size=128):
+    def __init__(self, input_size, hidden_size=256, num_layers=1, output_size=128):
         super(LSTM, self).__init__()
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
 
-        self.conv = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1)
+        self.conv = nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, stride=1, padding=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
 
         self.conv_output_size = self._get_conv_output_size(input_size)
 
+        self.dim_reduction = nn.Linear(self.conv_output_size, hidden_size*4)
+
         self.lstm = nn.LSTM(
-            input_size=self.conv_output_size,
+            input_size=hidden_size*4,
             hidden_size=hidden_size,
             num_layers=num_layers,
             batch_first=True
@@ -64,9 +73,16 @@ class LSTM(nn.Module):
         x = x.permute(0, 3, 1, 2)
 
         x = self.pool(torch.relu(self.conv(x)))
+        x = self.pool2(x)  # Additional pooling
         x = x.reshape(seq_len, -1)
 
-        output, (hidden, cell) = self.lstm(x)
+        x = torch.relu(self.dim_reduction(x))
+
+        @torch.compiler.disable(recursive=True)
+        def lstm_forward(x, hidden):
+            return self.lstm(x, hidden)
+
+        output, (hidden, cell) = checkpoint(lstm_forward, x, hidden, use_reentrant=False)
 
         x = self.fc(output)
 
@@ -76,7 +92,7 @@ class LSTM(nn.Module):
         height, width, _ = input_size
         with torch.no_grad():
             dummy_input = torch.zeros(1, 3, height, width)
-            conv_output = self.pool(self.conv(dummy_input))
+            conv_output = self.pool2(self.pool(self.conv(dummy_input)))
             return int(torch.prod(torch.tensor(conv_output.size()[1:])))
 
 
