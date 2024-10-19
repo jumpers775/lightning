@@ -4,6 +4,7 @@ import torch.optim as optim
 import numpy as np
 from torch.distributions import Normal, Categorical
 import torch.nn.functional as F
+from torch.amp import autocast, GradScaler
 from torch.optim import Adam
 from collections import deque
 import random
@@ -131,6 +132,7 @@ class LSTMTrainer:
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
         self.criterion = nn.MSELoss()
         self.hidden = None
+        self.scaler = GradScaler()
 
     def train(self, images, states):
         self.model.train()
@@ -144,20 +146,26 @@ class LSTMTrainer:
 
         sequence_length, channels, height, width = images_tensor.shape
 
-        hidden = None
-        cell = None
-
         total_loss = 0.0
+
+        hidden = torch.zeros(1, 1, 256).to(self.device)
+        cell = torch.zeros(1, 1, 256).to(self.device)
 
         for t in range(sequence_length):
             current_frame = images_tensor[t, :, :, :].float()
 
-            predicted_state = self.model(current_frame)
+            with autocast(device_type=self.device):
+                predicted_state, (hidden, cell) = self.model(current_frame, (hidden, cell))
 
-            loss = self.criterion(predicted_state, states_tensor[t, :].float())
+                loss = self.criterion(predicted_state, states_tensor[t, :].float())
 
-            loss.backward()
-            self.optimizer.step()
+            self.scaler.scale(loss).backward()
+
+            #memory optimization
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
             self.optimizer.zero_grad()
 
             with torch.no_grad():

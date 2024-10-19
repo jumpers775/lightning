@@ -45,7 +45,7 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
 
     encodingmodel = LSTM(env.observation_space["rgb"].shape, 256, state_dim)
 
-    visiontrainer = LSTMTrainer(encodingmodel, device="cpu")
+    visiontrainer = LSTMTrainer(encodingmodel, device=device)
 
     ppo = PPO(actingmodel, criticmodel, env.action_space, device=device)
 
