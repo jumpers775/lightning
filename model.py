@@ -59,16 +59,18 @@ class LSTM(nn.Module):
         self.fc = nn.Linear(hidden_size, output_size)
 
     def forward(self, x, hidden=None):
-        x = x.permute(2, 0, 1).unsqueeze(0)
+        seq_len, c, h, w = x.size()
+
+        x = x.permute(0, 3, 1, 2)
 
         x = self.pool(torch.relu(self.conv(x)))
-        x = x.view(1, -1, self.conv_output_size)
+        x = x.reshape(seq_len, -1)
 
         output, (hidden, cell) = self.lstm(x)
 
         x = self.fc(output)
 
-        return x.flatten(), (hidden, cell)
+        return x, (hidden, cell)
 
     def _get_conv_output_size(self, input_size):
         height, width, _ = input_size

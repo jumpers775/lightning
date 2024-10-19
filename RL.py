@@ -45,13 +45,14 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
 
     encodingmodel = LSTM(env.observation_space["rgb"].shape, 256, state_dim)
 
-    visiontrainer = LSTMTrainer(encodingmodel, device=device)
+    visiontrainer = LSTMTrainer(encodingmodel, device="cpu")
 
     ppo = PPO(actingmodel, criticmodel, env.action_space, device=device)
 
     ppo.train()
 
-    losses = []
+    actorlosses = []
+    reconstructionlosses = []
 
     pbar = tqdm(range(train), desc="Training", unit=" episodes")
 
@@ -83,17 +84,26 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
             log_probs.append(log_prob)
 
             state = next_state
-        loss = ppo.learn(states, actions, rewards, next_states, dones, log_probs)
-        pbar.set_postfix({'loss': loss})
-        visiontrainer.train(visionstates, states)
-        losses.append(loss)
+        actorloss = ppo.learn(states, actions, rewards, next_states, dones, log_probs)
+        reconstructionloss = visiontrainer.train(visionstates, states)
+        pbar.set_postfix({'actor loss': actorloss, 'reconstruction loss': reconstructionloss})
+        actorlosses.append(actorloss)
+        reconstructionlosses.append(reconstructionloss)
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(losses, label='losses')
-    ax.set_title('Losses')
-    ax.set_xlabel('Episode')
-    ax.set_ylabel('loss')
-    ax.legend()
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 12))
+
+    ax1.plot(actorlosses, label='Actor Losses')
+    ax1.set_title('Actor Losses')
+    ax1.set_xlabel('Episode')
+    ax1.set_ylabel('Loss')
+    ax1.legend()
+
+    ax2.plot(reconstructionlosses, label='Reconstruction Losses')
+    ax2.set_title('Reconstruction Losses')
+    ax2.set_xlabel('Episode')
+    ax2.set_ylabel('Loss')
+    ax2.legend()
+
     plt.tight_layout()
     plt.savefig('losses.png')
 
@@ -105,8 +115,7 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
         state, info = env.reset()
         done = False
         while not done:
-
-            ramstate = visiontrainer.infer(state["rgb"])
+            ramstate = visiontrainer.infer(state)
 
             action, _ = ppo.act(ramstate)
 
@@ -119,4 +128,4 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
 
 
 if __name__ == "__main__":
-    RL(train=int(500), model_path=None, out="model.pth")
+    RL(train=int(1), model_path=None, out="model.pth")

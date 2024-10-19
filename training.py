@@ -4,7 +4,6 @@ import torch.optim as optim
 import numpy as np
 from torch.distributions import Normal, Categorical
 import torch.nn.functional as F
-from torch.amp import autocast, GradScaler
 from torch.optim import Adam
 from collections import deque
 import random
@@ -131,8 +130,8 @@ class LSTMTrainer:
         self.model = model.to(self.device)
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
         self.criterion = nn.MSELoss()
-        self.hidden = None
-        self.scaler = GradScaler()
+        self.hidden = (torch.zeros(1, 1, 256).to(self.device),
+                       torch.zeros(1, 1, 256).to(self.device))
 
     def train(self, images, states):
         self.model.train()
@@ -142,38 +141,26 @@ class LSTMTrainer:
 
         shape = images_tensor.shape
         images_tensor = images_tensor.reshape(-1) / 255.0
-        images_tensor = images_tensor.reshape(shape)
+        images_tensor = images_tensor.reshape(shape).float()
 
         sequence_length, channels, height, width = images_tensor.shape
-
-        total_loss = 0.0
 
         hidden = torch.zeros(1, 1, 256).to(self.device)
         cell = torch.zeros(1, 1, 256).to(self.device)
 
-        for t in range(sequence_length):
-            current_frame = images_tensor[t, :, :, :].float()
 
-            with autocast(device_type=self.device):
-                predicted_state, (hidden, cell) = self.model(current_frame, (hidden, cell))
+        predicted_states, (hidden, cell) = self.model(images_tensor, (hidden, cell))
 
-                loss = self.criterion(predicted_state, states_tensor[t, :].float())
+        loss = self.criterion(predicted_states, states_tensor.float())
 
-            self.scaler.scale(loss).backward()
+        loss.backward()
 
-            #memory optimization
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            self.optimizer.zero_grad()
+        self.optimizer.step
+        self.optimizer.zero_grad()
 
-            with torch.no_grad():
-                total_loss += loss
-
-        avg_loss = total_loss / sequence_length
-
-        return avg_loss.item()
+        return loss.item()
 
     def evaluate_episode(self, images, states):
         self.model.eval()
@@ -196,7 +183,10 @@ class LSTMTrainer:
         self.model.eval()
         with torch.no_grad():
             # Add batch and sequence dimensions
-            image_tensor = image.unsqueeze(0).unsqueeze(0).to(self.device)
+            image_tensor = torch.tensor(image).unsqueeze(0).to(self.device)
+
+            # Normalize the image
+            image_tensor = image_tensor.float() / 255.0
 
             predicted_state, self.hidden = self.model(image_tensor, self.hidden)
 
@@ -208,4 +198,5 @@ class LSTMTrainer:
         Reset the internal state used for inference.
         Call this method when you want to start a new sequence.
         """
-        self.hidden = None
+        self.hidden = (torch.zeros(1, 1, 256).to(self.device),
+                       torch.zeros(1, 1, 256).to(self.device))
