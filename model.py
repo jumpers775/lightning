@@ -16,12 +16,13 @@ class SimBa(nn.Module):
         self.obs_shape = obs_shape
         self.action_shape = action_shape
         self.rsnorm = RSNorm(obs_shape)
-        self.linear1 = nn.Linear(obs_shape, 256).to(device)
-        self.layernorm1 = nn.LayerNorm(256, device=device)
-        self.linear2 = nn.Linear(256, 256).to(device)
-        self.linear3 = nn.Linear(256, 256).to(device)
-        self.layernorm2 = nn.LayerNorm(256, device=device)
-        self.outputlayer = nn.Linear(256, action_shape).to(device)
+        self.linear1 = nn.Linear(obs_shape, obs_shape*8).to(device)
+        self.layernorm1 = nn.LayerNorm(obs_shape*8, device=device)
+        self.linear2 = nn.Linear(obs_shape*8, obs_shape*16).to(device)
+        self.linear3 = nn.Linear(obs_shape*16, obs_shape*8).to(device)
+        self.layernorm2 = nn.LayerNorm(obs_shape*8, device=device)
+        self.outputlayer = nn.Linear(obs_shape*8, action_shape).to(device)
+
     def forward(self, x):
         x = x.to(self.device)
         x = self.rsnorm(x)
@@ -33,44 +34,94 @@ class SimBa(nn.Module):
         x = x + y
         x = self.layernorm2(x)
         x = self.outputlayer(x)
-        x = F.softmax(x, dim=-1)
         return x
 
 
+class LSTM(nn.Module):
+    def __init__(self, input_size, hidden_size=256, num_layers=2, output_size=128):
+        super(LSTM, self).__init__()
 
-class ViViTAE(nn.Module):
-    def __init__(self, input_size, output_size, patchnum, maxlen, hidden_dim: int = 512, device: str = "cpu", **kwargs):
-        super(ViViTAE, self).__init__()
-        self.device = torch.device(device)
-        self.tokenizer = nn.Linear(input_size, hidden_dim)
-        self.dropout = nn.Dropout(0.1)
-        self.patchembedding = SinusoidalPositionalEmbedding(patchnum, hidden_dim)
-        self.spatialencoder = TransformerEncoder(hidden_dim, hidden_dim, device=device)
-        self.spatialembedding = SinusoidalPositionalEmbedding(patchnum, hidden_dim)
-        self.temporalencoder = TransformerEncoder(hidden_dim, hidden_dim, device=device)
-        self.latent_encoder = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(True),
-            nn.Linear(hidden_dim, output_size)
-        ).to(device)
-        self.decoder = nn.Sequential(
-            nn.Linear(output_size, hidden_dim),
-            nn.ReLU(True),
-            nn.Linear(hidden_dim, hidden_dim)
-        ).to(device)
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+
+        self.conv = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1)
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        self.conv_output_size = self._get_conv_output_size(input_size)
+
+        self.lstm = nn.LSTM(
+            input_size=self.conv_output_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True
+        )
+
+        self.fc = nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
-        x = x.to(self.device)
-        y = self.tokenizer(x)
-        if self.training:
-            y = self.dropout(y)
-        y = self.patchembedding(y)
-        y = self.spatialencoder(y)
-        y = self.spatialembedding(y)
-        y = self.temporalencoder(y)
-        y = self.latent_encoder(y)
-        y = self.decoder(y)
-        return y
+        x = x.permute(2, 0, 1).unsqueeze(0)
+
+        x = self.pool(torch.relu(self.conv(x)))
+        x = x.view(1, -1, self.conv_output_size)
+
+        _, (hidden, _) = self.lstm(x)
+
+        x = hidden[-1]
+
+        x = self.fc(x)
+
+        return x.squeeze(0)
+
+    def _get_conv_output_size(self, input_size):
+        height, width, _ = input_size
+        with torch.no_grad():
+            dummy_input = torch.zeros(1, 3, height, width)
+            conv_output = self.pool(self.conv(dummy_input))
+            return int(torch.prod(torch.tensor(conv_output.size()[1:])))
+
+
+
+
+
+# way too much memory usage
+class ViViTAE(nn.Module):
+    def __init__(self, input_size, output_size, patchnum, maxlen, hidden_dim: int = 512, device: str = "cpu"):
+        super(ViViTAE, self).__init__()
+        self.device = torch.device(device)
+        self.patchnum = patchnum
+        self.maxlen = maxlen
+        self.hidden_dim = hidden_dim
+        self.input_size = input_size
+
+        self.patch_embed = nn.Conv2d(3, hidden_dim, kernel_size=patchnum, stride=patchnum)
+        self.pos_embed = nn.Parameter(torch.zeros(1, (input_size // patchnum) ** 2, hidden_dim))
+        self.temporal_embed = nn.Parameter(torch.zeros(1, maxlen, hidden_dim))
+
+        self.spatial_transformer = TransformerEncoder(hidden_dim, hidden_dim, device=device)
+        self.temporal_transformer = TransformerEncoder(hidden_dim, hidden_dim, device=device)
+
+        self.output_proj = nn.Linear(hidden_dim, output_size)
+
+    def forward(self, x):
+        b, t, c, h, w = x.shape
+        t = min(t, self.maxlen)
+
+        spatial_tokens = []
+        for i in range(t):
+            patches = self.patch_embed(x[:, i]).flatten(2).transpose(1, 2)
+            patches = patches + self.pos_embed[:, :patches.size(1), :]
+            encoded = self.spatial_transformer(patches)
+            spatial_tokens.append(encoded.mean(dim=1, keepdim=True))
+
+        temporal_input = torch.cat(spatial_tokens, dim=1)
+        temporal_input = temporal_input + self.temporal_embed[:, :t, :]
+
+        if t < self.maxlen:
+            padding = torch.zeros(b, self.maxlen - t, self.hidden_dim, device=self.device)
+            temporal_input = torch.cat([temporal_input, padding], dim=1)
+
+        output = self.temporal_transformer(temporal_input)
+        return self.output_proj(output)
 
 
 
@@ -78,6 +129,7 @@ class ViViTAE(nn.Module):
 class TransformerEncoder(nn.Module):
     def __init__(self, input_size, output_size, device=torch.device("cpu"), **kwargs):
         super(TransformerEncoder, self).__init__()
+        self.device = device
         self.attention = MultiheadDiffAttention(input_size, 8, device=device)
         self.norm1 = nn.LayerNorm(input_size, device=device)
         self.dropout1 = nn.Dropout(0.1)
@@ -90,7 +142,7 @@ class TransformerEncoder(nn.Module):
         self.dropout2 = nn.Dropout(0.1)
 
     def forward(self, x):
-        x = x.to(self.encoder[0].weight.device)
+        x = x.to(self.device)
         y = self.attention(x, x, x)
         if self.training:
             y = self.dropout1(x)
@@ -136,7 +188,7 @@ class SinusoidalPositionalEmbedding(nn.Module):
         return pos_emb.unsqueeze(0)
 
     def forward(self, x):
-        batch_size, seq_len, _ = x.size()
+        batch_size, seq_len = x.size()
         return x + self.positional_embedding[:, :seq_len, :].expand(batch_size, -1, -1)
 
 class RSNorm(nn.Module):
