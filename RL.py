@@ -18,7 +18,7 @@ import FIRSTenv
 def RL(train: int = 0, model_path: str = None, out: str = None):
     torch.set_float32_matmul_precision('high')
     envname = 'FIRSTenv/FIRSTenv_v0'
-    envname = "ALE/Pong-v5"
+    envname = "ALE/Alien-v5"
     env = CombinedObservationEnv(envname)
 
     #env = HistoryWrapper(env, history_length=contextlen)
@@ -44,18 +44,19 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
 
     ppo = PPO(actingmodel, criticmodel, env.action_space, device=device)
 
-
     encodingmodel = LSTM(env.observation_space["rgb"].shape, 256, output_size=state_dim)
 
     visiontrainer = LSTMTrainer(encodingmodel, device=device) # gpu uses too much memory
 
 
     ppo.train()
+    visiontrainer.train()
 
     actorlosses = []
     reconstructionlosses = []
-
-    pbar = tqdm(range(train), desc="Training", unit=" episodes")
+    episode_rewards = []
+    reconstruction_convergance = False
+    pbar = tqdm(range(train//2), desc="Training Phase 1", unit=" episodes")
 
     for i in pbar:
         if i % 10 == 0:
@@ -71,12 +72,16 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
         dones = []
         log_probs = []
 
+        episode_reward = 0
+
         while not done:
             action, log_prob = ppo.act(state["ram"])
 
             next_state, reward, terminated, truncated, _ = env.step(action)
 
             done = terminated or truncated
+
+            episode_reward += reward
 
             states.append(state["ram"])
             visionstates.append(state["rgb"])
@@ -88,12 +93,71 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
 
             state = next_state
         actorloss = ppo.learn(states, actions, rewards, next_states, dones, log_probs)
-        reconstructionloss = visiontrainer.train(visionstates, states)
+        if not reconstruction_convergance:
+            reconstructionloss = visiontrainer.learn(visionstates, states)
+            reconstructionlosses.append(reconstructionloss)
+            # Calculate moving average of reconstruction loss
+            window_size = 10
+            if len(reconstructionlosses) >= window_size:
+                moving_avg = sum(reconstructionlosses[-window_size:]) / window_size
+                if len(reconstructionlosses) % window_size == 0:
+                    if abs(moving_avg - reconstructionlosses[-1]) < 5:
+                        reconstruction_convergance = True
+        else:
+            reconstructionloss = "Converged"
         pbar.set_postfix({'actor loss': actorloss, 'reconstruction loss': reconstructionloss})
         actorlosses.append(actorloss)
-        reconstructionlosses.append(reconstructionloss)
+        episode_rewards.append(episode_reward)
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 12))
+
+    pbar = tqdm(range(train//2), desc="Training Phase 2", unit=" episodes")
+
+    for i in pbar:
+        if i % 10 == 0:
+            torch.cuda.empty_cache()
+        state, info = env.reset()
+        done = False
+
+        states = []
+        actions = []
+        rewards = []
+        next_states = []
+        dones = []
+        log_probs = []
+
+        episode_reward = 0
+
+        while not done:
+
+            recon_state = visiontrainer.infer(state["rgb"])
+
+            action, log_prob = ppo.act(recon_state)
+
+            next_state, reward, terminated, truncated, _ = env.step(action)
+
+            recon_next_state = visiontrainer.infer(next_state["rgb"])
+
+            done = terminated or truncated
+
+            episode_reward += reward
+
+            states.append(recon_state)
+            actions.append(action)
+            rewards.append(reward)
+            next_states.append(recon_next_state)
+            dones.append(done)
+            log_probs.append(log_prob)
+
+            state = next_state
+        actorloss = ppo.learn(states, actions, rewards, next_states, dones, log_probs)
+        pbar.set_postfix({'actor loss': actorloss})
+        actorlosses.append(actorloss)
+        episode_rewards.append(episode_reward)
+
+
+
+
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 18))
 
     ax1.plot(actorlosses, label='Actor Losses')
     ax1.set_title('Actor Losses')
@@ -107,6 +171,12 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
     ax2.set_ylabel('Loss')
     ax2.legend()
 
+    ax3.plot(episode_rewards, label='Episode Rewards')
+    ax3.set_title('Episode Rewards')
+    ax3.set_xlabel('Episode')
+    ax3.set_ylabel('Reward')
+    ax3.legend()
+
     plt.tight_layout()
     plt.savefig('losses.png')
 
@@ -114,6 +184,7 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
 
     env = gym.make(envname, obs_type="rgb", render_mode="human")
     ppo.eval()
+    visiontrainer.eval()
     for _ in range(5):
         state, info = env.reset()
         done = False
@@ -131,4 +202,4 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
 
 
 if __name__ == "__main__":
-    RL(train=int(100), model_path=None, out="model.pth")
+    RL(train=int(1000), model_path=None, out="model.pth")

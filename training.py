@@ -10,7 +10,7 @@ from collections import deque
 import random
 
 class PPO:
-    def __init__(self, actor, critic, action_space, lr=1e-4, gamma=0.99, K=3, eps_clip=0.2, device=None):
+    def __init__(self, actor, critic, action_space, lr=1e-6, gamma=0.99, K=3, eps_clip=0.2, device=None):
         self.gamma = gamma
         self.eps_clip = eps_clip
         self.K = K
@@ -20,8 +20,6 @@ class PPO:
         self.valuenet = torch.compile(critic.to(self.device))
         self.optimizer = Adam(list(self.policynet.parameters()) + list(self.valuenet.parameters()), lr=lr)
         self.loss = nn.MSELoss()
-
-        self.scaler = GradScaler()
 
         self.is_continuous = hasattr(action_space, 'high')
         if self.is_continuous:
@@ -36,7 +34,7 @@ class PPO:
         with torch.no_grad():
             if self.is_continuous:
                 action_mean = self.policynet(state)
-                action_std = torch.ones_like(action_mean) * 0.1
+                action_std = torch.ones_like(action_mean) * 0.2
                 dist = Normal(action_mean, action_std)
                 action = dist.sample()
                 action = torch.clamp(action, self.action_low, self.action_high)
@@ -106,14 +104,12 @@ class PPO:
             loss = policy_loss + 0.5 * value_loss - 0.01 * entropy
 
             # Compute gradient and apply gradient clipping
-            self.scaler.scale(loss).backward()
+            loss.backward()
 
             # Gradient Clipping
-            self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(list(self.policynet.parameters()) + list(self.valuenet.parameters()), max_norm=0.5)
 
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            self.optimizer.step()
 
             total_loss += loss.item()
 
@@ -135,11 +131,11 @@ class LSTMTrainer:
         self.model = torch.compile(model.to(self.device))
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
         self.criterion = nn.MSELoss()
-        self.hidden = (torch.zeros(1, 1, 256).to(self.device),
-                       torch.zeros(1, 1, 256).to(self.device))
+        self.hidden = (torch.zeros(4, 256).to(self.device),
+                       torch.zeros(4, 256).to(self.device))
         self.scaler = GradScaler()
 
-    def train(self, images, states):
+    def learn(self, images, states):
         self.model.train()
 
         images_tensor = torch.tensor(np.array(images)).to(self.device)
@@ -151,8 +147,8 @@ class LSTMTrainer:
 
         sequence_length, channels, height, width = images_tensor.shape
 
-        hidden = torch.zeros(1, self.model.hidden_size).to(self.device)
-        cell = torch.zeros(1, self.model.hidden_size).to(self.device)
+        hidden = torch.zeros(4, self.model.hidden_size).to(self.device)
+        cell = torch.zeros(4, self.model.hidden_size).to(self.device)
 
         with autocast(device_type=self.device):
             predicted_states, (hidden, cell) = self.model(images_tensor, (hidden, cell))
@@ -203,5 +199,11 @@ class LSTMTrainer:
         Reset the internal state used for inference.
         Call this method when you want to start a new sequence.
         """
-        self.hidden = (torch.zeros(1, 1, 256).to(self.device),
-                       torch.zeros(1, 1, 256).to(self.device))
+        self.hidden = (torch.zeros(1, self.model.hidden_size).to(self.device),
+                       torch.zeros(1, self.model.hidden_size).to(self.device))
+
+    def train(self):
+        self.model.train()
+
+    def eval(self):
+        self.model.eval()

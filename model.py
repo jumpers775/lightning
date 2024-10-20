@@ -11,7 +11,7 @@ import math
 from typing import Optional, Tuple
 
 class SimBa(nn.Module):
-    def __init__(self, obs_shape, action_shape, device: str ="cpu"):
+    def __init__(self, obs_shape, action_shape, device: str ="cpu", dropout_rate: float = 0.1):
         super(SimBa, self).__init__()
         self.device = torch.device(device)
         self.obs_shape = obs_shape
@@ -23,49 +23,52 @@ class SimBa(nn.Module):
         self.linear3 = nn.Linear(obs_shape*16, obs_shape*8).to(device)
         self.layernorm2 = nn.LayerNorm(obs_shape*8, device=device)
         self.outputlayer = nn.Linear(obs_shape*8, action_shape).to(device)
+        self.dropout = nn.Dropout(dropout_rate)
 
     def forward(self, x):
         x = x.to(self.device)
         x = self.rsnorm(x)
-        x = self.linear1(x)
+        x = self.dropout(self.linear1(x))
 
+        @torch.compiler.disable(recursive=False)
         def checkpoint_fn(x):
             y = self.layernorm1(x)
-            y = self.linear2(y)
+            y = self.dropout(self.linear2(y))
             y = F.relu(y)
-            y = self.linear3(y)
+            y = self.dropout(self.linear3(y))
             return y
 
         y = checkpoint(checkpoint_fn, x, use_reentrant=False)
         x = x + y
         x = self.layernorm2(x)
-        x = self.outputlayer(x)
+        x = self.dropout(self.outputlayer(x))
         return x
 
 
 class LSTM(nn.Module):
-    def __init__(self, input_size, hidden_size=256, num_layers=1, output_size=128):
+    def __init__(self, input_size, hidden_size=256, num_layers=4, output_size=128, dropout=0.1):
         super(LSTM, self).__init__()
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
-
         self.conv = nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, stride=1, padding=1)
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.pool2 = nn.MaxPool2d(kernel_size=4, stride=4)
+        self.pool = nn.MaxPool2d(kernel_size=3, stride=2)
+        self.pool2 = nn.MaxPool2d(kernel_size=6, stride=4)
 
         self.conv_output_size = self._get_conv_output_size(input_size)
 
-        self.dim_reduction = nn.Linear(self.conv_output_size, hidden_size*3)
+        self.dim_reduction = nn.Linear(self.conv_output_size, hidden_size)
 
         self.lstm = nn.LSTM(
-            input_size=hidden_size*3,
+            input_size=hidden_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
-            batch_first=True
+            batch_first=True,
+            dropout=dropout
         )
 
         self.fc = nn.Linear(hidden_size, output_size)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, hidden=None):
         seq_len, c, h, w = x.size()
@@ -76,7 +79,7 @@ class LSTM(nn.Module):
         x = self.pool2(x)
         x = x.reshape(seq_len, -1)
 
-        x = torch.relu(self.dim_reduction(x))
+        x = self.dropout(torch.relu(self.dim_reduction(x)))
 
         @torch.compiler.disable(recursive=True)
         def lstm_forward(x, hidden):
@@ -84,7 +87,7 @@ class LSTM(nn.Module):
 
         output, (hidden, cell) = checkpoint(lstm_forward, x, hidden, use_reentrant=False)
 
-        x = self.fc(output)
+        x = self.dropout(self.fc(output))
 
         return x, (hidden, cell)
 
