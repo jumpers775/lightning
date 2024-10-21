@@ -1,4 +1,5 @@
-Kachow!
+# Kachow!
+### "I am lightning" - Lightning McQueen
 
 reference papers:
  - [SMART: SELF-SUPERVISED MULTI-TASK PRETRAIN-ING WITH CONTROL TRANSFORMERS](https://arxiv.org/pdf/2301.09816)
@@ -9,3 +10,4 @@ reference papers:
  - [Learning Object Permanence from Video](https://www.ecva.net/papers/eccv_2020/papers_ECCV/papers/123610035.pdf)
  - [MambaOut RIP kobe](https://arxiv.org/pdf/2405.07992)
  - [ViViT](https://arxiv.org/pdf/2103.15691)
+ - [SimBa](https://arxiv.org/pdf/2410.09754)
