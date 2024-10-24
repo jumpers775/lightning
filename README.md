@@ -9,7 +9,7 @@
    - The environment state can be directly retreived from a simulated environment, but cant be collected from a physical one making this important
    - The LSTM allows us to remember past information, thus allowing us to remember where cubes are and where other robots are
    - The CNN allows us to get numeric data from image inputs, thus allowing us to input each frame captured by the camera to the LSTM
-3) We train a control model based on SimBa[^9] using [PPO (Proximal Policy Optimization)](https://en.wikipedia.org/wiki/Proximal_policy_optimization)
+3) We train a control model based on SimBa[^1] using [PPO (Proximal Policy Optimization)](https://en.wikipedia.org/wiki/Proximal_policy_optimization)
    - This uses a custom environment and reward function
   
   TO DO:
