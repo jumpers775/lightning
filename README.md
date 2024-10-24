@@ -16,8 +16,7 @@
    - make the environment
    - verify that the code makes sense
 
-
- [^1]: [SMART: SELF-SUPERVISED MULTI-TASK PRETRAIN-ING WITH CONTROL TRANSFORMERS](https://arxiv.org/pdf/2301.09816)
+ [^1]: [SimBa](https://arxiv.org/pdf/2410.09754)
  [^2]: [DIFFERENTIAL TRANSFORMER](https://arxiv.org/pdf/2410.05258)
  [^3]: [Decision Transformer](https://arxiv.org/pdf/2106.01345)
  [^4]: [Memory and Attention in Deep Learning](https://arxiv.org/pdf/2107.01390)
@@ -25,4 +24,5 @@
  [^6]: [Learning Object Permanence from Video](https://www.ecva.net/papers/eccv_2020/papers_ECCV/papers/123610035.pdf)
  [^7]: [MambaOut RIP kobe](https://arxiv.org/pdf/2405.07992)
  [^8]: [ViViT](https://arxiv.org/pdf/2103.15691)
- [^9]: [SimBa](https://arxiv.org/pdf/2410.09754)
+ [^9]: [SMART: SELF-SUPERVISED MULTI-TASK PRETRAIN-ING WITH CONTROL TRANSFORMERS](https://arxiv.org/pdf/2301.09816)
+
