@@ -151,6 +151,10 @@ class PPO:
 
         return action.cpu().numpy(), log_prob.cpu().numpy()
 
+    def process(self, state):
+        state = torch.FloatTensor(state).to(self.device)
+        return self.policynet(state)
+
     def learn(self, states, actions, rewards, next_states, dones, old_log_probs):
         """
         Update the policy and value networks using collected experiences.
@@ -296,13 +300,13 @@ class PPO:
             self.log_std.load_state_dict(checkpoint['log_std'])
 
 class LSTMTrainer:
-    def __init__(self, model, learning_rate=0.1, device=None):
+    def __init__(self, model, learning_rate=0.1, device=None, hidden=(4, 256)):
         self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = torch.compile(model.to(self.device), backend='aot_eager' if device == "mps" else "inductor")
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
         self.criterion = nn.MSELoss()
-        self.hidden = (torch.zeros(4, 256).to(self.device),
-                       torch.zeros(4, 256).to(self.device))
+        self.hidden = (torch.zeros(hidden[0], hidden[1]).to(self.device),
+                       torch.zeros(hidden[0], hidden[1]).to(self.device))
         self.scaler = GradScaler()
 
     def learn(self, images, states):
@@ -363,7 +367,21 @@ class LSTMTrainer:
             predicted_state, self.hidden = self.model(image_tensor, self.hidden)
 
             return predicted_state.squeeze(0).squeeze(0).cpu()
+    def infer_grad(self, image):
+        """
+        Perform inference on a single image, maintaining state across calls.
 
+        :param image: A single image tensor of shape (210, 160, 3)
+        :return: Predicted state tensor
+        """
+        self.model.eval()
+        image_tensor = torch.tensor(image).unsqueeze(0).to(self.device)
+
+        image_tensor = image_tensor.float() / 255.0
+
+        predicted_state, self.hidden = self.model(image_tensor, self.hidden)
+
+        return predicted_state.squeeze(0).squeeze(0).cpu()
     def reset_inference_state(self):
         """
         Reset the internal state used for inference.
@@ -371,9 +389,89 @@ class LSTMTrainer:
         """
         self.hidden = (torch.zeros(1, self.model.hidden_size).to(self.device),
                        torch.zeros(1, self.model.hidden_size).to(self.device))
-
+    def detach_hidden(self):
+        self.hidden = (self.hidden[0].detach(), self.hidden[1].detach())
     def train(self):
         self.model.train()
 
     def eval(self):
         self.model.eval()
+    def save(self, path):
+        torch.save(self.model.state_dict(), path)
+    def load(self, path):
+        self.model.load_state_dict(torch.load(path))
+
+
+
+class RLDistiller:
+    def __init__(self, ppo, lstm_trainer, student, env, device=None):
+        self.ppo = ppo
+        self.lstm_trainer = lstm_trainer
+        self.student = student.to(device)
+        self.studenttrainer = LSTMTrainer(student, learning_rate=0.001, device=device, hidden=(student.num_layers, student.hidden_size))
+        self.env = env
+        self.device = device
+        self.optimizer = optim.Adam(student.parameters(), lr=0.001)
+        self.criterion = nn.MSELoss()
+        self.finetune_optimizer = optim.Adam(student.parameters(), lr=0.0001)
+
+    def distill(self, num_passes):
+        # First phase: Distillation
+        self.ppo.eval_mode()
+        self.lstm_trainer.eval()
+        self.studenttrainer.train()
+
+        for _ in range(num_passes):
+            state, _ = self.env.reset()
+            done = False
+
+            while not done:
+                # Get encoded state from LSTM trainer
+                encoded_state = self.lstm_trainer.infer(state)
+
+                # Get action from PPO using encoded state
+                with torch.no_grad():
+                    output = self.ppo.process(encoded_state)
+                    action, _ = self.ppo.act(encoded_state)
+
+                # Forward pass through student
+                student_output = self.studenttrainer.infer_grad(state)
+                loss = self.criterion(student_output.to(self.device), output.to(self.device))
+
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+
+                self.studenttrainer.detach_hidden()
+
+                next_state, _, terminated, truncated, _ = self.env.step(action)
+                done = terminated or truncated
+                state = next_state
+
+        # Second phase: Finetuning
+        finetune_passes = num_passes // 4
+        self.studenttrainer.train()
+
+        for _ in range(finetune_passes):
+            state, _ = self.env.reset()
+            done = False
+            episode_reward = 0
+
+            while not done:
+                student_output = self.studenttrainer.infer(state["rgb"].unsqueeze(0).float() / 255.0)
+                action = student_output.argmax().item()
+
+                next_state, reward, terminated, truncated, _ = self.env.step(action)
+                done = terminated or truncated
+                episode_reward += reward
+
+                # Simple policy gradient update
+                if reward > 0:
+                    advantage = torch.tensor(reward).float().to(self.device)
+                    loss = -torch.log(F.softmax(student_output, dim=-1)[action]) * advantage
+
+                    self.finetune_optimizer.zero_grad()
+                    loss.backward()
+                    self.finetune_optimizer.step()
+
+                state = next_state

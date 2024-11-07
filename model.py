@@ -26,6 +26,8 @@ class SimBa(nn.Module):
         self.dropout = nn.Dropout(dropout_rate)
 
     def forward(self, x):
+        if type(x) != torch.Tensor:
+            x = torch.tensor(x, dtype=torch.float32)
         x = x.to(self.device)
         x = self.rsnorm(x)
         x = self.dropout(self.linear1(x))
@@ -71,6 +73,8 @@ class LSTM(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, hidden=None):
+        if len(x.size()) == 3:
+            x = x.unsqueeze(0)
         seq_len, c, h, w = x.size()
 
         x = x.permute(0, 3, 1, 2)
@@ -83,7 +87,7 @@ class LSTM(nn.Module):
 
         x = x.to(torch.float32)
 
-        @torch.compiler.disable(recursive=True)
+        @torch.compiler.disable(recursive=False)
         def lstm_forward(x, hidden):
             return self.lstm(x, hidden)
 
