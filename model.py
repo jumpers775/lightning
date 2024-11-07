@@ -81,6 +81,8 @@ class LSTM(nn.Module):
 
         x = self.dropout(torch.relu(self.dim_reduction(x)))
 
+        x = x.to(torch.float32)
+
         @torch.compiler.disable(recursive=True)
         def lstm_forward(x, hidden):
             return self.lstm(x, hidden)

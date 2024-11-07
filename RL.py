@@ -1,3 +1,6 @@
+import os
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+
 import gymnasium as gym
 import torch
 import time
@@ -7,13 +10,15 @@ import pandas as pd
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
-import os
 from tqdm import tqdm
 import ale_py
 from training import PPO, LSTMTrainer
 from utils import HistoryWrapper, CombinedObservationEnv
 from model import SimBa, LSTM
 import FIRSTenv
+
+
+
 
 def RL(train: int = 0, model_path: str = None, out: str = None):
     torch.set_float32_matmul_precision('high')
@@ -32,7 +37,6 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
     max_steps = env.spec.max_episode_steps
     device = 'cuda' if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else 'cpu'
 
-
     # useful for multi-threading
     # env = make_vec_env(envname, n_envs=os.cpu_count(), wrapper_class=HistoryWrapper, wrapper_kwargs={'history_length': contextlen})
 
@@ -49,7 +53,7 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
     visiontrainer = LSTMTrainer(encodingmodel, device=device) # gpu uses too much memory
 
 
-    ppo.train()
+    ppo.train_mode()
     visiontrainer.train()
 
     actorlosses = []
@@ -183,7 +187,7 @@ def RL(train: int = 0, model_path: str = None, out: str = None):
     input("Press Enter to continue...")
 
     env = gym.make(envname, obs_type="rgb", render_mode="human")
-    ppo.eval()
+    ppo.eval_mode()
     visiontrainer.eval()
     for _ in range(5):
         state, info = env.reset()
