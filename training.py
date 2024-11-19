@@ -88,17 +88,17 @@ class PPO:
 
         self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         backend = 'aot_eager' if device == "mps" else "inductor"
-        # Compile networks for performance optimization
+        # Compile networks to improve execution speed during training
         self.policynet = torch.compile(actor.to(self.device), backend=backend)
         self.valuenet = torch.compile(critic.to(self.device), backend=backend)
 
-        # Initialize optimizer with parameters from both networks
+        # Use a single optimizer for both networks to update them together
         self.optimizer = Adam(
             list(self.policynet.parameters()) + list(self.valuenet.parameters()),
             lr=lr
         )
 
-        # Learning rate scheduler
+        # Set up learning rate scheduler to adjust the learning rate over time
         if use_scheduler:
             self.scheduler = torch.optim.lr_scheduler.StepLR(
                 self.optimizer,
@@ -108,16 +108,16 @@ class PPO:
         else:
             self.scheduler = None
 
-        # Define loss function for value network
+        # Use Mean Squared Error loss for value function approximation
         self.value_loss_fn = nn.MSELoss()
 
-        # Determine action space type
+        # Check if action space is continuous or discrete to handle accordingly
         self.is_continuous = hasattr(action_space, 'high')
         if self.is_continuous:
             self.action_dim = action_space.shape[0]
             self.action_low = torch.FloatTensor(action_space.low).to(self.device)
             self.action_high = torch.FloatTensor(action_space.high).to(self.device)
-            # Initialize log std parameter for continuous actions
+            # Initialize log standard deviation for continuous action exploration
             self.log_std = nn.Parameter(torch.zeros(self.action_dim)).to(self.device)
         else:
             self.action_dim = action_space.n
@@ -170,7 +170,7 @@ class PPO:
         Returns:
             avg_loss (float): Average loss over optimization epochs.
         """
-        # Convert all inputs to tensors
+        # Convert inputs to tensors for PyTorch computations
         states = torch.FloatTensor(np.array(states)).to(self.device)
         actions = torch.FloatTensor(np.array(actions)).to(self.device)
         rewards = torch.FloatTensor(rewards).to(self.device)
@@ -178,32 +178,32 @@ class PPO:
         dones = torch.FloatTensor(dones).to(self.device)
         old_log_probs = torch.FloatTensor(np.array(old_log_probs)).to(self.device)
 
-        # Compute value estimates
+        # Compute current and next value estimates needed for advantage computation
         with torch.no_grad():
             values = self.valuenet(states).squeeze()
             next_values = self.valuenet(next_states).squeeze()
 
-            # Compute deltas for GAE
+            # Calculate temporal difference errors (deltas) for GAE
             deltas = rewards + self.gamma * next_values * (1 - dones) - values
 
-            # Compute advantages using GAE
+            # Compute advantages using GAE to reduce variance in policy gradient estimation
             advantages = torch.zeros_like(rewards).to(self.device)
             gae = 0
             for t in reversed(range(len(rewards))):
                 gae = deltas[t] + self.gamma * self.gae_lambda * (1 - dones[t]) * gae
                 advantages[t] = gae
 
-            # Compute returns
+            # Calculate returns by adding advantages to value estimates for training critic
             returns = advantages + values
 
-        # Normalize advantages for stability
+        # Normalize advantages for stability during training
         if self.advantage_normalization:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         total_loss = 0.0
 
         for _ in range(self.K):
-            # Forward pass
+            # Compute new action probabilities for PPO update
             if self.is_continuous:
                 action_mean = self.policynet(states)
                 action_std = self.log_std.exp().expand_as(action_mean)
@@ -217,37 +217,37 @@ class PPO:
                 new_log_probs = dist.log_prob(actions.squeeze().long())
                 entropy = dist.entropy().mean()
 
-            # Compute probability ratio
+            # Calculate ratio of new and old action probabilities for PPO clipping
             ratios = torch.exp(new_log_probs - old_log_probs)
 
-            # Compute surrogate losses
+            # Compute clipped surrogate objective for policy
             surr1 = ratios * advantages
             surr2 = torch.clamp(ratios, 1.0 - self.eps_clip, 1.0 + self.eps_clip) * advantages
             policy_loss = -torch.min(surr1, surr2).mean()
 
-            # Compute value loss
+            # Calculate value function loss to update critic
             value_predictions = self.valuenet(states).squeeze()
             value_loss = self.value_loss_fn(value_predictions, returns)
 
-            # Total loss
+            # Combine all components into total loss
             loss = (policy_loss
                     + self.vf_coef * value_loss
                     - self.entropy_coef * entropy)
 
-            # Backpropagation
+            # Perform backpropagation to update policy and value networks
             self.optimizer.zero_grad()
             loss.backward()
 
-            # Gradient clipping
+            # Clip gradients to prevent exploding gradients
             nn.utils.clip_grad_norm_(list(self.policynet.parameters()) +
                                      list(self.valuenet.parameters()) +
                                      ([self.log_std] if self.is_continuous else []),
                                      self.max_grad_norm)
 
-            # Optimizer step
+            # Optimizer step to update parameters
             self.optimizer.step()
 
-            # Optional: Step the scheduler
+            # Update learning rate scheduler if used
             if self.scheduler is not None:
                 self.scheduler.step()
 
@@ -316,11 +316,13 @@ class LSTMTrainer:
         states_tensor = torch.tensor(np.array(states)).to(self.device)
 
         shape = images_tensor.shape
+        # Normalize image pixel values to [0, 1] for model input
         images_tensor = images_tensor.reshape(-1) / 255.0
         images_tensor = images_tensor.reshape(shape).float()
 
         sequence_length, channels, height, width = images_tensor.shape
 
+        # Initialize hidden states for LSTM at each training step
         hidden = torch.zeros(4, self.model.hidden_size).to(self.device)
         cell = torch.zeros(4, self.model.hidden_size).to(self.device)
 
@@ -417,6 +419,7 @@ class RLDistiller:
 
     def distill(self, num_passes):
         # First phase: Distillation
+        # Train student model to mimic PPO outputs using LSTM-encoded states
         self.ppo.eval_mode()
         self.lstm_trainer.eval()
         self.studenttrainer.train()
@@ -426,15 +429,15 @@ class RLDistiller:
             done = False
 
             while not done:
-                # Get encoded state from LSTM trainer
+                # Use LSTM trainer to encode the state for comparison with student
                 encoded_state = self.lstm_trainer.infer(state)
 
-                # Get action from PPO using encoded state
+                # Obtain target outputs from the PPO agent for distillation
                 with torch.no_grad():
                     output = self.ppo.process(encoded_state)
                     action, _ = self.ppo.act(encoded_state)
 
-                # Forward pass through student
+                # Compute student model's prediction and loss against PPO output
                 student_output = self.studenttrainer.infer_grad(state)
                 loss = self.criterion(student_output.to(self.device), output.to(self.device))
 
@@ -449,6 +452,7 @@ class RLDistiller:
                 state = next_state
 
         # Second phase: Finetuning
+        # Finetune the student model with policy gradient updates for improved performance
         finetune_passes = num_passes // 4
         self.studenttrainer.train()
 
@@ -465,7 +469,7 @@ class RLDistiller:
                 done = terminated or truncated
                 episode_reward += reward
 
-                # Simple policy gradient update
+                # Update student model using rewards to refine policy
                 if reward > 0:
                     advantage = torch.tensor(reward).float().to(self.device)
                     loss = -torch.log(F.softmax(student_output, dim=-1)[action]) * advantage
