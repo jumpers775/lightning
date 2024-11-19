@@ -404,7 +404,6 @@ class LSTMTrainer:
         self.model.load_state_dict(torch.load(path))
 
 
-
 class RLDistiller:
     def __init__(self, ppo, lstm_trainer, student, env, device=None):
         self.ppo = ppo
@@ -423,6 +422,9 @@ class RLDistiller:
         self.ppo.eval_mode()
         self.lstm_trainer.eval()
         self.studenttrainer.train()
+
+        total_loss = 0.0
+        total_steps = 0
 
         for _ in range(num_passes):
             state, _ = self.env.reset()
@@ -444,6 +446,9 @@ class RLDistiller:
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
+
+                total_loss += loss.item()
+                total_steps += 1
 
                 self.studenttrainer.detach_hidden()
 
@@ -478,4 +483,10 @@ class RLDistiller:
                     loss.backward()
                     self.finetune_optimizer.step()
 
+                    total_loss += loss.item()
+                    total_steps += 1
+
                 state = next_state
+
+        avg_loss = total_loss / total_steps if total_steps > 0 else 0.0
+        return avg_loss
