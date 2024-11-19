@@ -79,14 +79,13 @@ def RL(train: int = 200, model_path: str = None, out: str = "model.pth"):
     reconstruction_convergence = False
 
     # Divide training into three phases and distillation within 'train' episodes
-    phases = 4
+    phases = 3
 
     phase_max_episodes = train // phases
     remainder = train % phases
 
     phase1_max_episodes = phase_max_episodes
     phase2_max_episodes = phase_max_episodes
-    phase3_max_episodes = phase_max_episodes
     distill_episodes = phase_max_episodes + remainder
 
     total_episodes = train
@@ -94,7 +93,7 @@ def RL(train: int = 200, model_path: str = None, out: str = "model.pth"):
     pbar = tqdm(total=total_episodes, desc="Training Progress", unit=" episodes")
     current_stage = "Phase 1"
 
-    for episode in range(1, train + 1):
+    for episode in range(1, train-distill_episodes + 1):
         if not reconstruction_convergence and episode > phase1_max_episodes:
             current_stage = "Phase 2"
 
@@ -167,15 +166,13 @@ def RL(train: int = 200, model_path: str = None, out: str = "model.pth"):
         elif current_stage == "Phase 2":
             # Continue training PPO with reconstructed states
             actorloss = ppo.learn(states, actions, rewards, next_states, dones, log_probs)
-            pbar.set_postfix({'actor loss': actorloss, 'stage': current_stage})
+            pbar.set_postfix({'actor loss': actorloss})
 
         actorlosses.append(actorloss)
         episode_rewards.append(episode_reward)
 
         pbar.update(1)
         pbar.set_description(f"Training Progress - {current_stage}")
-
-    print("\nStarting Distillation Phase")
 
     # Use only visual observations for distillation to train student model
     env = env.envs[env.obs_types.index("rgb")]
@@ -286,4 +283,4 @@ def RL(train: int = 200, model_path: str = None, out: str = "model.pth"):
     eval_env.close()
 
 if __name__ == "__main__":
-    RL(train=10, model_path="model_checkpoint.pth", out="model_final.pth")
+    RL(train=200, model_path="model_checkpoint.pth", out="model_final.pth")
