@@ -16,7 +16,9 @@ elif torch.backends.mps.is_available():
 else:
     device = torch.device('cpu')
 
-#device = torch.device("cpu")
+# cpu is fastest
+device = torch.device('cpu')
+
 
 print("Using device: " + str(device))
 
@@ -31,23 +33,18 @@ class LayerNorm(nn.Module):
         return (x - mean) / (std + self.epsilon)
 
 class PolicyNetwork(nn.Module):
-    def __init__(self, action_dim, hidden_dim=128):
+    def __init__(self, action_dim, hidden_dim=32):
         super().__init__()
         self.conv_layers = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=8, stride=4),  # (210,160,3) -> (51,39,32)
+            nn.Conv2d(3, 16, kernel_size=8, stride=4),  # (210,160,3) -> (51,39,16)
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2), # (51,39,32) -> (24,18,64)
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1), # (24,18,64) -> (22,16,64)
+            nn.Conv2d(16, 32, kernel_size=4, stride=2), # (51,39,16) -> (24,18,32)
             nn.ReLU(),
             nn.Flatten()
         )
-        self.flat_size = 22 * 16 * 64
+        self.flat_size = 24 * 18 * 32
 
         self.fc1 = nn.Linear(self.flat_size, hidden_dim)
-        self.ln1 = LayerNorm(hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.ln2 = LayerNorm(hidden_dim)
         self.action_head = nn.Linear(hidden_dim, action_dim)
 
         self.apply(self._sparse_init)
@@ -69,30 +66,24 @@ class PolicyNetwork(nn.Module):
             state = state.unsqueeze(0)
         state = state.permute(0, 3, 1, 2)
         x = self.conv_layers(state)
-        x = F.leaky_relu(self.ln1(self.fc1(x)))
-        x = F.leaky_relu(self.ln2(self.fc2(x)))
+        x = F.leaky_relu(self.fc1(x))
         action_logits = self.action_head(x)
         action_probs = F.softmax(action_logits, dim=-1)
         return action_probs
 
 class ValueNetwork(nn.Module):
-    def __init__(self, hidden_dim=128):
+    def __init__(self, hidden_dim=32):
         super().__init__()
         self.conv_layers = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=8, stride=4),  # (210,160,3) -> (51,39,32)
+            nn.Conv2d(3, 16, kernel_size=8, stride=4),  # (210,160,3) -> (51,39,16)
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),  # (51,39,32) -> (24,18,64)
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),  # (24,18,64) -> (22,16,64)
+            nn.Conv2d(16, 32, kernel_size=4, stride=2),  # (51,39,16) -> (24,18,32)
             nn.ReLU(),
             nn.Flatten()
         )
-        self.flat_size = 22 * 16 * 64
+        self.flat_size = 24 * 18 * 32
 
         self.fc1 = nn.Linear(self.flat_size, hidden_dim)
-        self.ln1 = LayerNorm(hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.ln2 = LayerNorm(hidden_dim)
         self.value_head = nn.Linear(hidden_dim, 1)
 
         self.apply(self._sparse_init)
@@ -114,8 +105,7 @@ class ValueNetwork(nn.Module):
             state = state.unsqueeze(0)
         state = state.permute(0, 3, 1, 2)
         x = self.conv_layers(state)
-        x = F.leaky_relu(self.ln1(self.fc1(x)))
-        x = F.leaky_relu(self.ln2(self.fc2(x)))
+        x = F.leaky_relu(self.fc1(x))
         value = self.value_head(x)
         return value
 
@@ -199,7 +189,7 @@ class StreamAC:
         delta = reward + self.gamma * next_value - value
 
         # Update eligibility traces for value network
-        value_grads = torch.autograd.grad(value, self.value.parameters(), retain_graph=True)
+        value_grads = torch.autograd.grad(value, list(self.value.parameters()), retain_graph=True)
         for i, (eligibility, grad) in enumerate(zip(self.value_eligibility, value_grads)):
             self.value_eligibility[i] = self.gamma * self.lambda_ * eligibility + grad
 
@@ -213,7 +203,7 @@ class StreamAC:
         entropy = entropy.mean()
 
         policy_objective = log_prob + 0.01 * entropy * delta.sign()
-        policy_grads = torch.autograd.grad(policy_objective, self.policy.parameters(), retain_graph=True)
+        policy_grads = torch.autograd.grad(policy_objective, list(self.policy.parameters()), retain_graph=True)
 
         for i, (eligibility, grad) in enumerate(zip(self.policy_eligibility, policy_grads)):
             self.policy_eligibility[i] = self.gamma * self.lambda_ * eligibility + grad
@@ -295,7 +285,5 @@ for _ in range(1000):
         break
 
 print(f"Test episode reward: {episode_reward}")
-
-
 
 env.close()
