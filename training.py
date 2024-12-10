@@ -88,7 +88,7 @@ class PPO:
         self.advantage_normalization = advantage_normalization
 
         self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        backend = 'aot_eager' if device == "mps" else "inductor"
+        backend = 'aot_eager' if str(device) == "mps" else "inductor"
         # Compile networks to improve execution speed during training
         self.policynet = torch.compile(actor.to(self.device), backend=backend)
         self.valuenet = torch.compile(critic.to(self.device), backend=backend)
